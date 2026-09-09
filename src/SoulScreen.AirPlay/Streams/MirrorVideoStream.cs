@@ -64,7 +64,8 @@ public sealed class MirrorVideoStream : IAsyncDisposable
     /// <summary>Raised when the codec configuration arrives or changes (rotation, resolution).</summary>
     public event EventHandler<VideoFormat>? FormatChanged;
 
-    /// <summary>Raised per frame with an Annex-B payload. The handler owns the sample and must dispose it.</summary>
+    /// <summary>Raised per frame with an Annex-B payload. The sample is recycled once the
+    /// handler returns, so a handler that keeps the bytes must copy them.</summary>
     public event EventHandler<MediaSample>? SampleReady;
 
     /// <summary>Raised once the sender disconnects the data channel.</summary>

@@ -1,12 +1,27 @@
 <Project>
   <!--
-    Copy the optional FairPlay helper next to every build output so the app finds it
-    without any probing. Guarded on existence: the DLL is produced by
-    tools/build-fairplay.ps1 and is not part of a fresh clone.
+    Optional native payloads. Both are produced by scripts in tools/ and are gitignored,
+    so every item is guarded on existence: a fresh clone builds without them and reports a
+    clear message at runtime instead of failing the build.
   -->
+
+  <!-- FairPlay helper: small, and every project that references SoulScreen.AirPlay wants it. -->
   <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)native\soulscreen_fairplay.dll')">
     <None Include="$(MSBuildThisFileDirectory)native\soulscreen_fairplay.dll">
       <Link>soulscreen_fairplay.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Visible>false</Visible>
+    </None>
+  </ItemGroup>
+
+  <!--
+    FFmpeg is around 100 MB, so it is only staged for projects that actually produce an
+    executable. During development SoulScreen.Media also finds native/ffmpeg by walking up
+    from the build output, so this mainly matters for publishing.
+  -->
+  <ItemGroup Condition="'$(OutputType)' == 'Exe' Or '$(OutputType)' == 'WinExe'">
+    <None Include="$(MSBuildThisFileDirectory)native\ffmpeg\*.dll">
+      <Link>ffmpeg\%(Filename)%(Extension)</Link>
       <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
       <Visible>false</Visible>
     </None>

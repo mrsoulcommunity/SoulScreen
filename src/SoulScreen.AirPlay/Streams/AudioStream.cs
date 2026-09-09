@@ -68,7 +68,7 @@ public sealed class AudioStream : IAsyncDisposable
     public long PacketCount => Interlocked.Read(ref _packetCount);
     public long LostPacketCount => Interlocked.Read(ref _lostCount);
 
-    /// <summary>Raised per audio packet. The handler owns the sample and must dispose it.</summary>
+    /// <summary>Raised per audio packet. The sample is recycled once the handler returns.</summary>
     public event EventHandler<MediaSample>? SampleReady;
 
     private static Socket BindEphemeralUdp()

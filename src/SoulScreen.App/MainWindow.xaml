@@ -1,12 +1,237 @@
-﻿<Window x:Class="SoulScreen.App.MainWindow"
+<Window x:Class="SoulScreen.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
-        xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-        xmlns:local="clr-namespace:SoulScreen.App"
-        mc:Ignorable="d"
-        Title="MainWindow" Height="450" Width="800">
-    <Grid>
+        xmlns:rendering="clr-namespace:SoulScreen.App.Rendering"
+        xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
+        Title="SoulScreen"
+        Height="760" Width="440"
+        MinHeight="420" MinWidth="360"
+        Background="{StaticResource Surface}"
+        TextOptions.TextFormattingMode="Display">
 
+    <!-- Typography defaults ride down as inherited values, so anything with its own style
+         (buttons, headings) still wins. -->
+    <Grid x:Name="RootGrid"
+          TextElement.Foreground="{StaticResource TextPrimary}"
+          TextElement.FontFamily="Segoe UI Variable Text, Segoe UI"
+          TextElement.FontSize="13">
+        <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+
+        <!-- ===================== toolbar, doubling as the caption =====================
+             The strip is the window's caption: dragging, double-click to maximise and the
+             system menu all come from WindowChrome. Anything clickable inside it has to opt
+             back out of the caption with IsHitTestVisibleInChrome. -->
+        <Border x:Name="Toolbar" Grid.Row="0" Height="46" Background="{StaticResource SurfaceRaised}"
+                BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
+            <Grid Margin="14,0,0,0">
+                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                    <Ellipse x:Name="StatusDot" Width="8" Height="8" VerticalAlignment="Center"
+                             Fill="{StaticResource TextTertiary}" />
+                    <TextBlock x:Name="ReceiverName" Text="SoulScreen" Margin="10,0,0,0"
+                               FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center" />
+                    <TextBlock x:Name="DeviceLabel" Style="{StaticResource Caption}" Margin="10,0,0,0"
+                               VerticalAlignment="Center" />
+                </StackPanel>
+
+                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Button x:Name="SnapshotButton" Style="{StaticResource IconButton}" Content="&#xE722;"
+                            ToolTip="Save a screenshot (Ctrl+S)" Click="OnSnapshot" IsEnabled="False" />
+                    <ToggleButton x:Name="PinButton" Style="{StaticResource IconToggle}" Content="&#xE718;"
+                                  ToolTip="Keep on top" Checked="OnPinChanged" Unchecked="OnPinChanged" />
+                    <Button x:Name="FullscreenButton" Style="{StaticResource IconButton}" Content="&#xE740;"
+                            ToolTip="Fullscreen (F11)" Click="OnToggleFullscreen" />
+                    <ToggleButton x:Name="LogButton" Style="{StaticResource IconToggle}" Content="&#xE8FD;"
+                                  ToolTip="Activity log" Checked="OnLogToggled" Unchecked="OnLogToggled" />
+                    <ToggleButton x:Name="SettingsButton" Style="{StaticResource IconToggle}" Content="&#xE713;"
+                                  ToolTip="Settings" Checked="OnSettingsToggled" Unchecked="OnSettingsToggled" />
+
+                    <Rectangle Width="1" Margin="8,12" Fill="{StaticResource BorderBrush}" />
+
+                    <Button x:Name="MinimiseButton" Style="{StaticResource CaptionButton}" Content="&#xE921;"
+                            ToolTip="Minimise" Click="OnMinimise" />
+                    <Button x:Name="MaximiseButton" Style="{StaticResource CaptionButton}" Content="&#xE922;"
+                            ToolTip="Maximise" Click="OnMaximise" />
+                    <Button x:Name="CloseButton" Style="{StaticResource CloseButton}" Content="&#xE8BB;"
+                            ToolTip="Close" Click="OnClose" />
+                </StackPanel>
+            </Grid>
+        </Border>
+
+        <!-- ============================ content ============================ -->
+        <Grid Grid.Row="1" ClipToBounds="True">
+
+            <!-- The mirrored screen, black-backed so letterboxing reads as intentional. -->
+            <Border x:Name="VideoHost" Background="#FF000000" Visibility="Collapsed">
+                <rendering:VideoSurface x:Name="Video" />
+            </Border>
+
+            <!-- Idle: what to do next, and anything blocking it. -->
+            <ScrollViewer x:Name="IdlePanel" VerticalScrollBarVisibility="Auto" Padding="0,0,4,0">
+                <!-- A ScrollViewer measures its content with unbounded height, so centring
+                     needs a host that is at least as tall as the viewport. Below that height
+                     the Grid stops growing and the scrollbar takes over. -->
+                <Grid MinHeight="{Binding ViewportHeight, RelativeSource={RelativeSource AncestorType=ScrollViewer}}">
+                <StackPanel Margin="34,32" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="360">
+
+                    <TextBlock Text="&#xE8EA;" FontFamily="{StaticResource IconFont}" FontSize="40"
+                               Foreground="{StaticResource AccentMuted}" HorizontalAlignment="Center" />
+
+                    <TextBlock x:Name="IdleTitle" Text="Waiting for your iPhone"
+                               Style="{StaticResource Heading}" FontSize="23"
+                               HorizontalAlignment="Center" TextAlignment="Center" Margin="0,20,0,0" />
+
+                    <TextBlock x:Name="IdleSubtitle" Style="{StaticResource Subheading}"
+                               HorizontalAlignment="Center" TextAlignment="Center"
+                               TextWrapping="Wrap" Margin="0,9,0,0"
+                               Text="This PC is advertising itself on your network." />
+
+                    <Border Background="{StaticResource SurfaceRaised}" CornerRadius="10"
+                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
+                            Padding="20,17" Margin="0,26,0,0">
+                        <StackPanel>
+                            <StackPanel Orientation="Horizontal">
+                                <TextBlock Text="1" Style="{StaticResource Metric}" Width="16"
+                                           Foreground="{StaticResource Accent}" />
+                                <TextBlock Style="{StaticResource Subheading}" TextWrapping="Wrap"
+                                           Text="Open Control Center on the iPhone" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,11,0,0">
+                                <TextBlock Text="2" Style="{StaticResource Metric}" Width="16"
+                                           Foreground="{StaticResource Accent}" />
+                                <TextBlock Style="{StaticResource Subheading}" TextWrapping="Wrap"
+                                           Text="Tap Screen Mirroring" />
+                            </StackPanel>
+                            <StackPanel Orientation="Horizontal" Margin="0,11,0,0">
+                                <TextBlock Text="3" Style="{StaticResource Metric}" Width="16"
+                                           Foreground="{StaticResource Accent}" />
+                                <TextBlock Style="{StaticResource Subheading}" TextWrapping="Wrap">
+                                    <Run Text="Choose" />
+                                    <Run x:Name="IdleReceiverName" Text="SoulScreen"
+                                         Foreground="{StaticResource TextPrimary}" FontWeight="SemiBold" />
+                                </TextBlock>
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+
+                    <!-- Problems that will stop mirroring before it starts. -->
+                    <ItemsControl x:Name="WarningList" Margin="0,14,0,0">
+                        <ItemsControl.ItemTemplate>
+                            <DataTemplate>
+                                <Border Background="#1AFBBF24" CornerRadius="9" Padding="15,12" Margin="0,0,0,9"
+                                        BorderBrush="#40FBBF24" BorderThickness="1">
+                                    <StackPanel Orientation="Horizontal">
+                                        <TextBlock Text="&#xE7BA;" FontFamily="{StaticResource IconFont}"
+                                                   Foreground="{StaticResource Warning}" FontSize="14"
+                                                   VerticalAlignment="Top" Margin="0,1,11,0" />
+                                        <StackPanel>
+                                            <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="SemiBold"
+                                                       TextWrapping="Wrap" />
+                                            <TextBlock Text="{Binding Detail}" Style="{StaticResource Caption}"
+                                                       TextWrapping="Wrap" Margin="0,4,0,0" />
+                                        </StackPanel>
+                                    </StackPanel>
+                                </Border>
+                            </DataTemplate>
+                        </ItemsControl.ItemTemplate>
+                    </ItemsControl>
+
+                    <Button x:Name="ReceiverToggle" Style="{StaticResource GhostButton}"
+                            Content="Stop receiver" HorizontalAlignment="Center"
+                            Margin="0,20,0,0" Click="OnToggleReceiver" />
+                </StackPanel>
+                </Grid>
+            </ScrollViewer>
+
+            <!-- Settings, as an overlay so the app stays a single window. -->
+            <Border x:Name="SettingsPanel" Visibility="Collapsed" Background="{StaticResource Surface}">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,4,0">
+                    <StackPanel Margin="30,28" MaxWidth="380" HorizontalAlignment="Center">
+                        <TextBlock Text="Settings" Style="{StaticResource Heading}" FontSize="20" />
+
+                        <TextBlock Text="Receiver name" Style="{StaticResource Caption}" Margin="0,22,0,6" />
+                        <TextBox x:Name="NameBox" />
+                        <TextBlock Text="What the iPhone shows in its Screen Mirroring list."
+                                   Style="{StaticResource Caption}" Margin="0,6,0,0" TextWrapping="Wrap" />
+
+                        <TextBlock Text="Control port" Style="{StaticResource Caption}" Margin="0,18,0,6" />
+                        <TextBox x:Name="PortBox" Width="110" HorizontalAlignment="Left" />
+                        <TextBlock Text="7000 is what Apple receivers use. Change it only if something else holds the port."
+                                   Style="{StaticResource Caption}" Margin="0,6,0,0" TextWrapping="Wrap" />
+
+                        <TextBlock Text="Advertised resolution" Style="{StaticResource Caption}" Margin="0,18,0,6" />
+                        <StackPanel Orientation="Horizontal">
+                            <TextBox x:Name="WidthBox" Width="76" />
+                            <TextBlock Text="x" Style="{StaticResource Subheading}" Margin="8,0" VerticalAlignment="Center" />
+                            <TextBox x:Name="HeightBox" Width="76" />
+                            <TextBlock Text="at" Style="{StaticResource Subheading}" Margin="12,0,8,0" VerticalAlignment="Center" />
+                            <TextBox x:Name="RefreshBox" Width="56" />
+                            <TextBlock Text="fps" Style="{StaticResource Subheading}" Margin="8,0,0,0" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <TextBlock Text="The phone encodes to fit this. Lower it if the picture stutters over Wi-Fi."
+                                   Style="{StaticResource Caption}" Margin="0,6,0,0" TextWrapping="Wrap" />
+
+                        <CheckBox x:Name="AudioCheck" Content="Receive audio from the phone" Margin="0,22,0,0" />
+                        <CheckBox x:Name="AutoStartCheck" Content="Start the receiver when SoulScreen opens" Margin="0,13,0,0" />
+                        <CheckBox x:Name="TraceCheck" Content="Log every protocol message" Margin="0,13,0,0" />
+                        <TextBlock Text="Verbose, but the first thing to turn on when a phone will not connect."
+                                   Style="{StaticResource Caption}" Margin="27,5,0,0" TextWrapping="Wrap" />
+
+                        <Border Background="{StaticResource SurfaceRaised}" CornerRadius="9" Padding="15,13" Margin="0,24,0,0"
+                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                            <StackPanel>
+                                <TextBlock Text="This receiver" Style="{StaticResource Caption}" />
+                                <TextBlock x:Name="IdentityText" Style="{StaticResource Metric}" Margin="0,7,0,0"
+                                           TextWrapping="Wrap" />
+                            </StackPanel>
+                        </Border>
+
+                        <StackPanel Orientation="Horizontal" Margin="0,24,0,0">
+                            <Button Content="Apply and restart receiver" Style="{StaticResource PrimaryButton}"
+                                    Click="OnApplySettings" />
+                            <Button Content="Cancel" Style="{StaticResource GhostButton}" Margin="10,0,0,0"
+                                    Click="OnCancelSettings" />
+                        </StackPanel>
+                    </StackPanel>
+                </ScrollViewer>
+            </Border>
+
+            <!-- Activity log, docked over the bottom of the content area. -->
+            <Border x:Name="LogPanel" Visibility="Collapsed" VerticalAlignment="Bottom" Height="210"
+                    Background="#F00E0F13" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid Margin="14,8,8,4">
+                        <TextBlock Text="Activity" Style="{StaticResource Caption}" VerticalAlignment="Center" />
+                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                            <Button Style="{StaticResource IconButton}" Content="&#xE8C8;" ToolTip="Copy"
+                                    Click="OnCopyLog" />
+                            <Button Style="{StaticResource IconButton}" Content="&#xE74D;" ToolTip="Clear"
+                                    Click="OnClearLog" />
+                        </StackPanel>
+                    </Grid>
+                    <ScrollViewer x:Name="LogScroller" Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="14,0,8,10">
+                        <TextBlock x:Name="LogText" Style="{StaticResource Metric}" FontSize="10.5"
+                                   TextWrapping="NoWrap" LineHeight="15" />
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+        </Grid>
+
+        <!-- =========================== status bar =========================== -->
+        <Border x:Name="StatusBar" Grid.Row="2" Background="{StaticResource SurfaceRaised}"
+                BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
+            <Grid Margin="14,6">
+                <TextBlock x:Name="StatusText" Style="{StaticResource Metric}" Text="Starting..." />
+                <TextBlock x:Name="MetricsText" Style="{StaticResource Metric}" HorizontalAlignment="Right" />
+            </Grid>
+        </Border>
     </Grid>
 </Window>
