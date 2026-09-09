@@ -14,28 +14,33 @@ namespace SoulScreen.Media;
 /// </para>
 /// <para>
 /// What the queue drops matters more than how deep it is. H.264 frames are not independent:
-/// discard one keyframe and every frame after it decodes to nothing until the phone happens
-/// to send another, which in mirroring can be seconds - long enough to look like a black
-/// screen rather than a dropped frame. So the queue drops the oldest <em>inter</em> frame,
-/// keeps keyframes, and after any drop skips ahead to the next keyframe instead of feeding
-/// the decoder frames whose references are gone.
+/// discard a keyframe and everything after it decodes to nothing until the phone sends
+/// another, which in mirroring can be seconds. So keyframes are never the ones evicted.
+/// </para>
+/// <para>
+/// After an inter frame is lost the decoder does produce artefacts for a moment, and the
+/// tempting fix - skip ahead to the next keyframe - is worse: mirroring keyframes are rare
+/// enough that it freezes the picture for seconds where the artefacts would have healed in
+/// well under one. So the decoder is fed straight through a gap, and only waits for a
+/// keyframe when it has nothing to decode against at all: at the start of a session, and
+/// after the phone changes format.
 /// </para>
 /// </summary>
 public sealed class VideoPipeline : IAsyncDisposable
 {
     /// <summary>
-    /// Frames buffered between the network and the decoder. Deep enough to absorb decoder
-    /// start-up and a scheduling hiccup, shallow enough that the picture cannot drift far
-    /// behind the phone.
+    /// Frames buffered between the network and the decoder. Deep enough that decoder
+    /// start-up and an occasional scheduling hiccup never cost a frame, shallow enough that
+    /// the picture cannot drift far behind the phone if decoding genuinely cannot keep up.
     /// </summary>
-    private const int QueueDepth = 8;
+    private const int QueueDepth = 16;
 
     private readonly ILogger _log = Log.For("pipeline");
     private readonly Queue<QueuedSample> _queue = new(QueueDepth);
     private readonly object _queueLock = new();
     private readonly SemaphoreSlim _queued = new(0);
     private readonly CancellationTokenSource _cts = new();
-    private readonly Task _decodeLoop;
+    private readonly Thread _decodeThread;
     private readonly Stopwatch _rateClock = Stopwatch.StartNew();
 
     private IMirrorSource? _source;
@@ -47,7 +52,10 @@ public sealed class VideoPipeline : IAsyncDisposable
     /// from any of them.</summary>
     private byte[] _parameterSets = [];
 
-    /// <summary>Set after a drop: inter frames are skipped until the next keyframe.</summary>
+    /// <summary>
+    /// True while the decoder has no usable reference at all, so inter frames would decode
+    /// to noise. Set at the start and on a format change - deliberately not after a drop.
+    /// </summary>
     private bool _needKeyFrame = true;
 
     private bool _completed;
@@ -60,7 +68,16 @@ public sealed class VideoPipeline : IAsyncDisposable
     public VideoPipeline()
     {
         FFmpegRuntime.ThrowIfUnavailable();
-        _decodeLoop = Task.Run(() => DecodeLoopAsync(_cts.Token), CancellationToken.None);
+
+        _decodeThread = new Thread(() => DecodeLoop(_cts.Token))
+        {
+            Name = "SoulScreen decode",
+            IsBackground = true,
+            // Above normal, not highest: decoding must beat ordinary background work but
+            // never starve the UI thread that has to present what it produces.
+            Priority = ThreadPriority.AboveNormal,
+        };
+        _decodeThread.Start();
     }
 
     /// <summary>Codec configuration currently in force, once the sender has announced one.</summary>
@@ -163,9 +180,14 @@ public sealed class VideoPipeline : IAsyncDisposable
         {
             lock (_queueLock)
             {
-                _parameterSets = format.ParameterSets;
-                // New geometry invalidates whatever the decoder was tracking.
-                _needKeyFrame = true;
+                // Only a configuration that actually differs invalidates what the decoder is
+                // tracking. Resynchronising on a repeat would stall the picture until the
+                // next keyframe for no reason at all.
+                if (!_parameterSets.AsSpan().SequenceEqual(format.ParameterSets))
+                {
+                    _parameterSets = format.ParameterSets;
+                    _needKeyFrame = true;
+                }
             }
         }
 
@@ -189,8 +211,6 @@ public sealed class VideoPipeline : IAsyncDisposable
             if (_queue.Count >= QueueDepth)
             {
                 evicted = Evict();
-                // Everything still queued now has a hole in front of it, so resynchronise.
-                _needKeyFrame = true;
                 Interlocked.Increment(ref _droppedSamples);
             }
 
@@ -227,7 +247,12 @@ public sealed class VideoPipeline : IAsyncDisposable
         return evicted;
     }
 
-    private async Task DecodeLoopAsync(CancellationToken token)
+    /// <summary>
+    /// Runs on a dedicated thread rather than the thread pool. Decoding happens sixty times
+    /// a second and must not queue behind unrelated pool work; a thread of its own, slightly
+    /// above normal priority, is what keeps the cadence even under load.
+    /// </summary>
+    private void DecodeLoop(CancellationToken token)
     {
         try
         {
@@ -243,7 +268,7 @@ public sealed class VideoPipeline : IAsyncDisposable
         {
             while (!token.IsCancellationRequested)
             {
-                await _queued.WaitAsync(token).ConfigureAwait(false);
+                _queued.Wait(token);
 
                 QueuedSample? next;
                 byte[] parameterSets;
@@ -412,8 +437,10 @@ public sealed class VideoPipeline : IAsyncDisposable
 
         await _cts.CancelAsync().ConfigureAwait(false);
 
-        try { await _decodeLoop.ConfigureAwait(false); }
-        catch (OperationCanceledException) { }
+        // The decode thread is waiting on the semaphore, which cancellation releases; give
+        // it a bounded moment to unwind rather than blocking shutdown on it forever.
+        if (!_decodeThread.Join(TimeSpan.FromSeconds(2)))
+            _log.Warn("the decode thread did not stop in time");
 
         _cts.Dispose();
         _queued.Dispose();

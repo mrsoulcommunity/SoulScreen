@@ -24,7 +24,14 @@ public partial class MainWindow : Window
     private readonly ILogger _log = Log.For("ui");
     private readonly ObservableCollection<WarningItem> _warnings = [];
     private readonly Queue<string> _logLines = new();
+    private readonly object _logLock = new();
     private readonly DispatcherTimer _metricsTimer;
+
+    /// <summary>Set when new log lines have arrived but the panel has not been redrawn.</summary>
+    private bool _logDirty;
+
+    /// <summary>Hides the pointer after a moment of stillness in fullscreen.</summary>
+    private DispatcherTimer? _cursorTimer;
 
     private AppSettings _settings = null!;
     private AirPlayReceiver? _receiver;
@@ -43,11 +50,18 @@ public partial class MainWindow : Window
         WarningList.ItemsSource = _warnings;
         Video.VideoSizeChanged += OnVideoSizeChanged;
 
+        VideoHost.MouseLeftButtonDown += OnVideoClicked;
+        VideoHost.MouseMove += OnVideoPointerMoved;
+
         _metricsTimer = new DispatcherTimer(DispatcherPriority.Background)
         {
             Interval = TimeSpan.FromMilliseconds(500),
         };
-        _metricsTimer.Tick += (_, _) => UpdateMetrics();
+        _metricsTimer.Tick += (_, _) =>
+        {
+            UpdateMetrics();
+            RefreshLogPanel();
+        };
 
         Log.Entry += OnLogEntry;
 
@@ -221,25 +235,54 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnFrameDecoded(object? sender, DecodedVideoFrame frame) => Video.Present(frame);
 
+    /// <summary>
+    /// Reshapes the window to the phone's aspect ratio, once per session, so a portrait
+    /// screen fills the window instead of sitting between black bars.
+    /// <para>
+    /// Both dimensions move, not just the height: matching a 9:19.5 phone by growing the
+    /// height alone produces a window taller than the screen, which then gets clamped and
+    /// leaves the bars it was meant to remove.
+    /// </para>
+    /// </summary>
     private void OnVideoSizeChanged(object? sender, Size size)
     {
-        // Reshape the window once per new geometry so a portrait phone gets a portrait
-        // window instead of black bars, but never fight the user's own sizing afterwards.
+        // Never fight the user's own sizing after the first fit.
         if (_adjustedForVideoSize || _isFullscreen || WindowState != WindowState.Normal) return;
+        if (size.Width <= 0 || size.Height <= 0) return;
         _adjustedForVideoSize = true;
 
-        if (size.Width <= 0 || size.Height <= 0) return;
-
-        var chromeHeight = Toolbar.ActualHeight + StatusBar.ActualHeight;
-        var contentWidth = ActualWidth - (ActualWidth - VideoHost.ActualWidth);
-        if (contentWidth <= 0) contentWidth = ActualWidth;
-
-        var desiredContentHeight = contentWidth * size.Height / size.Width;
-        var desiredHeight = desiredContentHeight + chromeHeight;
-
         var workArea = SystemParameters.WorkArea;
-        Height = Math.Min(desiredHeight, workArea.Height - 40);
-        if (Top + Height > workArea.Bottom) Top = Math.Max(workArea.Top, workArea.Bottom - Height - 10);
+        var chromeHeight = Toolbar.ActualHeight + StatusBar.ActualHeight;
+        // Border and caption sit outside the client area the layout measured.
+        var borderWidth = Math.Max(ActualWidth - VideoHost.ActualWidth, 0);
+
+        // Leave a margin so the window never sits flush against the screen edges.
+        var maxWidth = workArea.Width * 0.9;
+        var maxHeight = workArea.Height * 0.9;
+
+        // Start from the current width and let the aspect ratio decide the height, then fall
+        // back to fitting the height when that would not fit.
+        var contentWidth = Math.Max(VideoHost.ActualWidth, MinWidth - borderWidth);
+        var contentHeight = contentWidth * size.Height / size.Width;
+
+        if (contentHeight + chromeHeight > maxHeight)
+        {
+            contentHeight = maxHeight - chromeHeight;
+            contentWidth = contentHeight * size.Width / size.Height;
+        }
+
+        if (contentWidth + borderWidth > maxWidth)
+        {
+            contentWidth = maxWidth - borderWidth;
+            contentHeight = contentWidth * size.Height / size.Width;
+        }
+
+        Width = Math.Max(contentWidth + borderWidth, MinWidth);
+        Height = Math.Max(contentHeight + chromeHeight, MinHeight);
+
+        // Nudge back on screen if the new size pushed an edge past the work area.
+        if (Left + Width > workArea.Right) Left = Math.Max(workArea.Left, workArea.Right - Width - 8);
+        if (Top + Height > workArea.Bottom) Top = Math.Max(workArea.Top, workArea.Bottom - Height - 8);
     }
 
     // ------------------------------------------------------------------- panels
@@ -253,6 +296,15 @@ public partial class MainWindow : Window
         RecordButton.Visibility = _pipeline is not null ? Visibility.Visible : Visibility.Collapsed;
         MuteButton.Visibility = _audio is not null ? Visibility.Visible : Visibility.Collapsed;
         StatusDot.Fill = (Brush)FindResource("Success");
+        // Figures from a previous session would make the first seconds of this one unreadable.
+        Video.ResetStatistics();
+
+        // Windows measures idleness by input, so without this the monitor blanks part-way
+        // through watching a mirrored phone.
+        DisplaySleep.Hold();
+
+        var device = _receiver?.Device?.Name;
+        Title = device is null ? $"SoulScreen - {_settings.DeviceName}" : $"{device} - SoulScreen";
     }
 
     private void ShowIdle()
@@ -265,6 +317,9 @@ public partial class MainWindow : Window
         RecordButton.Visibility = Visibility.Collapsed;
         MuteButton.Visibility = Visibility.Collapsed;
         Video.Clear();
+
+        DisplaySleep.Release();
+        if (_settings is not null) Title = $"SoulScreen - {_settings.DeviceName}";
     }
 
     private void SetIdleState(string title, string subtitle, MirrorSourceState state)
@@ -314,6 +369,39 @@ public partial class MainWindow : Window
         _settings.Save();
     }
 
+    /// <summary>Double-click toggles fullscreen, which is what every video player does.</summary>
+    private void OnVideoClicked(object sender, MouseButtonEventArgs e)
+    {
+        if (e.ClickCount != 2) return;
+        ToggleFullscreen();
+        e.Handled = true;
+    }
+
+    /// <summary>
+    /// Brings the pointer back on movement and restarts the countdown that hides it again.
+    /// Only in fullscreen: hiding it over a windowed picture would strand the user with no
+    /// way to reach the toolbar.
+    /// </summary>
+    private void OnVideoPointerMoved(object sender, MouseEventArgs e)
+    {
+        if (!_isFullscreen) return;
+        ShowPointer();
+        _cursorTimer?.Stop();
+        _cursorTimer?.Start();
+    }
+
+    private void ShowPointer()
+    {
+        if (Cursor != Cursors.None) return;
+        Cursor = null;
+    }
+
+    private void HidePointer()
+    {
+        _cursorTimer?.Stop();
+        if (_isFullscreen) Cursor = Cursors.None;
+    }
+
     private void OnMinimise(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
 
     private void OnMaximise(object sender, RoutedEventArgs e) =>
@@ -344,6 +432,9 @@ public partial class MainWindow : Window
             StatusBar.Visibility = Visibility.Visible;
             FullscreenButton.Content = "";
             RootGrid.Margin = WindowFrame.MaximisedPadding(this);
+
+            _cursorTimer?.Stop();
+            Cursor = null;
         }
         else
         {
@@ -362,7 +453,20 @@ public partial class MainWindow : Window
             StatusBar.Visibility = Visibility.Collapsed;
             FullscreenButton.Content = "";
             RootGrid.Margin = new Thickness(0);
+
+            _cursorTimer ??= CreateCursorTimer();
+            _cursorTimer.Start();
         }
+    }
+
+    private DispatcherTimer CreateCursorTimer()
+    {
+        var timer = new DispatcherTimer(DispatcherPriority.Input)
+        {
+            Interval = TimeSpan.FromSeconds(2),
+        };
+        timer.Tick += (_, _) => HidePointer();
+        return timer;
     }
 
     private void OnKeyDown(object sender, KeyEventArgs e)
@@ -467,7 +571,10 @@ public partial class MainWindow : Window
     private void OnLogToggled(object sender, RoutedEventArgs e)
     {
         LogPanel.Visibility = LogButton.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
-        if (LogButton.IsChecked == true) LogScroller.ScrollToEnd();
+        if (LogButton.IsChecked != true) return;
+
+        lock (_logLock) _logDirty = true;
+        RefreshLogPanel();
     }
 
     private void OnCopyLog(object sender, RoutedEventArgs e)
@@ -478,7 +585,11 @@ public partial class MainWindow : Window
 
     private void OnClearLog(object sender, RoutedEventArgs e)
     {
-        _logLines.Clear();
+        lock (_logLock)
+        {
+            _logLines.Clear();
+            _logDirty = false;
+        }
         LogText.Text = string.Empty;
     }
 
@@ -577,13 +688,20 @@ public partial class MainWindow : Window
             return;
         }
 
-        var parts = new List<string>(4);
+        var parts = new List<string>(6);
         if (Video.VideoSize.Width > 0)
             parts.Add($"{(int)Video.VideoSize.Width}x{(int)Video.VideoSize.Height}");
         if (_pipeline.DecodedFrameCount > 0)
             parts.Add($"{_pipeline.FramesPerSecond:0.#} fps");
-        if (_pipeline.DroppedSampleCount > 0)
-            parts.Add($"{_pipeline.DroppedSampleCount} dropped");
+
+        // Decode-to-screen time. Frames superseded within one composition pass are normal
+        // when the phone outruns the monitor, so they are not reported as a problem;
+        // genuinely dropped or skipped samples are.
+        var latency = Video.AveragePresentLatencyMilliseconds;
+        if (latency > 0) parts.Add($"{latency:0.#} ms");
+
+        var lost = _pipeline.DroppedSampleCount + _pipeline.SkippedSampleCount;
+        if (lost > 0) parts.Add($"{lost} lost");
         if (_audio is { IsPlaying: true })
             parts.Add(_audio.Muted ? "muted" : $"audio {_audio.BufferedDuration.TotalMilliseconds:0} ms");
         if (_pipeline.IsRecording)
@@ -607,6 +725,11 @@ public partial class MainWindow : Window
 
     // -------------------------------------------------------------------- log
 
+    /// <summary>
+    /// Runs on whatever thread logged. Deliberately does no dispatcher work: with protocol
+    /// tracing on this is called often, and posting a redraw per line put enough on the UI
+    /// thread to be visible in the picture. The panel is redrawn on the metrics tick instead.
+    /// </summary>
     private void OnLogEntry(LogEntry entry)
     {
         if (entry.Level < LogLevel.Debug) return;
@@ -615,18 +738,32 @@ public partial class MainWindow : Window
             ? entry.ToString()
             : $"{entry.TimestampUtc.ToLocalTime():HH:mm:ss.fff} {entry.Level.ToString().ToUpperInvariant(),-5} [{entry.Category}] {entry.Message}: {entry.Exception.Message}";
 
-        Dispatcher.BeginInvoke(DispatcherPriority.Background, () =>
+        lock (_logLock)
         {
             _logLines.Enqueue(line);
             while (_logLines.Count > MaxLogLines) _logLines.Dequeue();
+            _logDirty = true;
+        }
+    }
 
-            if (LogPanel.Visibility != Visibility.Visible) return;
+    /// <summary>Redraws the activity panel at the metrics cadence, and only while visible.</summary>
+    private void RefreshLogPanel()
+    {
+        if (LogPanel.Visibility != Visibility.Visible) return;
+
+        string text;
+        lock (_logLock)
+        {
+            if (!_logDirty) return;
+            _logDirty = false;
 
             var builder = new StringBuilder(_logLines.Count * 80);
             foreach (var existing in _logLines) builder.AppendLine(existing);
-            LogText.Text = builder.ToString();
-            LogScroller.ScrollToEnd();
-        });
+            text = builder.ToString();
+        }
+
+        LogText.Text = text;
+        LogScroller.ScrollToEnd();
     }
 
     // --------------------------------------------------------------- shutdown
@@ -642,6 +779,8 @@ public partial class MainWindow : Window
 
         Log.Entry -= OnLogEntry;
         _metricsTimer.Stop();
+        _cursorTimer?.Stop();
+        DisplaySleep.Release();
         Video.Dispose();
 
         try { await StopReceiverAsync(); }

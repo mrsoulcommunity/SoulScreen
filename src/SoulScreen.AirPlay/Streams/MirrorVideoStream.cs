@@ -35,6 +35,7 @@ public sealed class MirrorVideoStream : IAsyncDisposable
     private Task? _acceptLoop;
     private FileStream? _dumpStream;
     private AvcDecoderConfiguration? _configuration;
+    private byte[]? _parameterSets;
     private long _frameCount;
 
     public MirrorVideoStream(
@@ -208,8 +209,19 @@ public sealed class MirrorVideoStream : IAsyncDisposable
             return;
         }
 
-        _configuration = configuration;
         var parameterSets = configuration.ToAnnexB();
+
+        // Senders re-announce the same configuration periodically. Passing every repeat on
+        // would make the decoder resynchronise for no reason, which shows up as a periodic
+        // stall in the picture, so only a genuine change is forwarded.
+        if (_parameterSets is not null && _parameterSets.AsSpan().SequenceEqual(parameterSets))
+        {
+            _log.Trace("codec configuration re-announced unchanged");
+            return;
+        }
+
+        _configuration = configuration;
+        _parameterSets = parameterSets;
         _dumpStream?.Write(parameterSets);
 
         configuration.TryGetDimensions(out var width, out var height);

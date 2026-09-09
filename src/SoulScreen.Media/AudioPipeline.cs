@@ -41,6 +41,13 @@ public sealed class AudioPipeline : IAsyncDisposable
     private float _requestedVolume = 1f;
     private bool _muted;
 
+    /// <summary>
+    /// Reused across packets. NAudio takes an array rather than a span, and allocating one
+    /// ninety times a second only to throw it away is pure garbage-collector pressure on the
+    /// thread that also receives the audio.
+    /// </summary>
+    private byte[] _transfer = new byte[8192];
+
     /// <summary>Format currently being played, if any.</summary>
     public AudioFormat Format => _format;
 
@@ -171,7 +178,9 @@ public sealed class AudioPipeline : IAsyncDisposable
             var pcm = decoder.Decode(sample.Span);
             if (pcm.IsEmpty) return;
 
-            buffer.AddSamples(pcm.ToArray(), 0, pcm.Length);
+            if (_transfer.Length < pcm.Length) _transfer = new byte[pcm.Length];
+            pcm.CopyTo(_transfer);
+            buffer.AddSamples(_transfer, 0, pcm.Length);
             Interlocked.Increment(ref _playedPackets);
         }
         catch (Exception ex)
