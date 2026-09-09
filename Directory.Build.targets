@@ -1,0 +1,14 @@
+<Project>
+  <!--
+    Copy the optional FairPlay helper next to every build output so the app finds it
+    without any probing. Guarded on existence: the DLL is produced by
+    tools/build-fairplay.ps1 and is not part of a fresh clone.
+  -->
+  <ItemGroup Condition="Exists('$(MSBuildThisFileDirectory)native\soulscreen_fairplay.dll')">
+    <None Include="$(MSBuildThisFileDirectory)native\soulscreen_fairplay.dll">
+      <Link>soulscreen_fairplay.dll</Link>
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+      <Visible>false</Visible>
+    </None>
+  </ItemGroup>
+</Project>

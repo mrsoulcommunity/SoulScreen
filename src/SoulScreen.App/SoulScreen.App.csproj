@@ -1,0 +1,18 @@
+﻿<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\SoulScreen.Core\SoulScreen.Core.csproj" />
+    <ProjectReference Include="..\SoulScreen.AirPlay\SoulScreen.AirPlay.csproj" />
+    <ProjectReference Include="..\SoulScreen.Usb\SoulScreen.Usb.csproj" />
+    <ProjectReference Include="..\SoulScreen.Media\SoulScreen.Media.csproj" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,13 @@
+<Project>
+  <PropertyGroup>
+    <LangVersion>12.0</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <WarningsNotAsErrors>CS1591</WarningsNotAsErrors>
+    <InvariantGlobalization>true</InvariantGlobalization>
+    <Product>SoulScreen</Product>
+    <Company>SoulScreen</Company>
+    <Version>0.1.0</Version>
+  </PropertyGroup>
+</Project>
