@@ -15,15 +15,18 @@ Windows 11, .NET 8, x64.
 
 ## Status
 
+Wireless mirroring works end to end. Verified against an iPhone 17 Pro on iOS 26:
+the receiver appears in Control Center, pairs, completes FairPlay, and renders the
+phone's screen at 498x1080 / 59.9 fps.
+
 | Piece | State |
 | --- | --- |
 | mDNS / Bonjour advertisement | working — receiver appears in Control Center |
 | RTSP control channel | working |
 | Legacy pairing (pair-setup / pair-verify) | working |
 | FairPlay handshake (`/fp-setup`) | working, via an optional native helper |
-| Mirrored video (H.264 receive + decrypt) | working — dumps a playable elementary stream |
-| Audio (AAC-ELD receive + decrypt) | receives and decrypts; not yet decoded to speakers |
-| On-screen rendering | not yet |
+| Mirrored video: receive, decrypt, decode, display | working |
+| Audio (AAC-ELD receive + decrypt) | receives and decrypts; not yet played |
 | USB transport | not yet |
 
 ---
@@ -150,6 +153,17 @@ Almost always FairPlay. Run the `fairplay` self-test. The log line to look for i
 The stream key is wrong. That key is derived from the FairPlay key *and* the pair-verify
 ECDH secret, so it usually means pair-verify did not complete — run with `--trace` and
 check for `pair-verify completed`.
+
+**The picture is letterboxed.**
+iOS encodes to fit the resolution the receiver advertises, so a portrait phone against a
+16:9 receiver gets black bars. Set a portrait size such as 1080 x 1920 under Settings if
+you mostly mirror portrait.
+
+**Everything connects but the window stays black.**
+Check the activity log for `reference picture missing`. That means keyframes are being
+lost, and the picture cannot recover until the phone sends another one. It should not
+happen — the pipeline refuses to drop keyframes — but a machine that cannot decode in real
+time will show it; lower the advertised resolution or frame rate in Settings.
 
 **Port 5353 will not bind.**
 Apple's Bonjour service (installed with iTunes) also uses it. SoulScreen shares the port
