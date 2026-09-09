@@ -103,8 +103,22 @@ public sealed class AirPlaySession : IAsyncDisposable
     {
         if (StreamKey is null || StreamIv is null)
             throw new InvalidOperationException("Cannot start audio: SETUP never delivered a key and IV.");
+        if (PairVerify.SharedSecret is null)
+            throw new InvalidOperationException(
+                "Cannot start audio: pair-verify did not complete, so the stream key cannot be derived.");
 
-        Audio = new AudioStream(StreamKey, StreamIv, format, dumpDirectory);
+        // The same session binding the video uses. Audio takes the result directly as its
+        // AES-CBC key, where video derives a CTR key and IV from it.
+        var audioKey = Crypto.AirPlayKeys.SessionKey(StreamKey, PairVerify.SharedSecret);
+        try
+        {
+            Audio = new AudioStream(audioKey, StreamIv, format, dumpDirectory);
+        }
+        finally
+        {
+            System.Security.Cryptography.CryptographicOperations.ZeroMemory(audioKey);
+        }
+
         Audio.Start(cancellationToken);
         return Audio;
     }

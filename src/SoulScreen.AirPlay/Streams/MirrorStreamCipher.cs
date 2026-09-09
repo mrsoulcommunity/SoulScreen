@@ -36,16 +36,12 @@ public sealed class MirrorStreamCipher : IDisposable
         if (fairPlayKey.Length < 16) throw new ArgumentException("FairPlay key must be 16 bytes.", nameof(fairPlayKey));
         if (ecdhSecret.Length < 32) throw new ArgumentException("ECDH secret must be 32 bytes.", nameof(ecdhSecret));
 
-        // Bind the FairPlay key to this pairing session.
-        Span<byte> combined = stackalloc byte[48];
-        fairPlayKey[..16].CopyTo(combined);
-        ecdhSecret[..32].CopyTo(combined[16..]);
-        Span<byte> sessionKey = stackalloc byte[64];
-        SHA512.HashData(combined, sessionKey);
+        var sessionKey = AirPlayKeys.SessionKey(fairPlayKey, ecdhSecret);
 
         var id = streamConnectionId.ToString(CultureInfo.InvariantCulture);
-        var key = Derive("AirPlayStreamKey" + id, sessionKey[..16]);
-        var iv = Derive("AirPlayStreamIV" + id, sessionKey[..16]);
+        var key = Derive("AirPlayStreamKey" + id, sessionKey);
+        var iv = Derive("AirPlayStreamIV" + id, sessionKey);
+        CryptographicOperations.ZeroMemory(sessionKey);
 
         _cipher = new AesCtr(key, iv);
         CryptographicOperations.ZeroMemory(key);

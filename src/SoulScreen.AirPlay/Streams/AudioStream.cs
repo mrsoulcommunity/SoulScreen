@@ -40,6 +40,7 @@ public sealed class AudioStream : IAsyncDisposable
     private bool _haveSequence;
     private long _packetCount;
     private long _lostCount;
+    private bool _plausibilityChecked;
 
     public AudioStream(ReadOnlySpan<byte> aesKey, ReadOnlySpan<byte> aesIv, AudioFormat format, string? dumpDirectory = null)
     {
@@ -143,6 +144,8 @@ public sealed class AudioStream : IAsyncDisposable
                     decryptor.TransformBlock(payload, 0, encryptedLength, payload, 0);
                 }
 
+                CheckPlausibility(payload, payloadLength);
+
                 Interlocked.Increment(ref _packetCount);
                 _dumpStream?.Write(payload, 0, payloadLength);
 
@@ -186,6 +189,33 @@ public sealed class AudioStream : IAsyncDisposable
             catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionReset) { }
             catch (SocketException) { break; }
         }
+    }
+
+    /// <summary>
+    /// Looks at the first decrypted packet and says so if it does not begin like an audio
+    /// frame.
+    /// <para>
+    /// A wrong key is otherwise completely silent here: the transport reports every packet
+    /// received and none lost, and the only symptom is a decoder rejecting all of them, well
+    /// away from the cause. The leading byte of an AAC-ELD or ALAC frame is one of a small
+    /// known set, which is enough to tell noise from audio.
+    /// </para>
+    /// </summary>
+    private void CheckPlausibility(byte[] payload, int length)
+    {
+        if (_plausibilityChecked || length == 0) return;
+        _plausibilityChecked = true;
+
+        // Element instance tags an AAC-ELD or ALAC frame can start with.
+        var plausible = payload[0] is 0x8c or 0x8d or 0x8e or 0x80 or 0x81 or 0x82 or 0x20;
+        if (plausible)
+        {
+            _log.Debug($"first audio frame looks well formed (starts 0x{payload[0]:x2})");
+            return;
+        }
+
+        _log.Warn($"the first audio frame starts 0x{payload[0]:x2}, which is not an audio frame - " +
+                  "the stream key is probably wrong, and nothing will decode");
     }
 
     private void TrackSequence(ushort sequence)
