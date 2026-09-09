@@ -28,8 +28,22 @@ public sealed class AirPlayRequestHandler(AirPlayOptions options, DeviceIdentity
     /// <summary>Stream type for the realtime (low-latency) audio variant.</summary>
     private const int StreamTypeRealtimeAudio = 103;
 
+    /// <summary>Qualifier iOS sends to ask for the _airplay._tcp TXT record over HTTP.</summary>
+    private const string TxtAirPlayKey = "txtAirPlay";
+
+    /// <summary>Qualifier for the _raop._tcp TXT record.</summary>
+    private const string TxtRaopKey = "txtRAOP";
+
     private readonly ILogger _log = Log.For("airplay");
     private CancellationToken _shutdownToken = CancellationToken.None;
+
+    /// <summary>
+    /// The advertised services, needed because /info can be asked for their raw TXT records.
+    /// Set by the receiver once the advertisement has been built.
+    /// </summary>
+    public Discovery.ServiceProfile? AirPlayService { get; set; }
+
+    public Discovery.ServiceProfile? RaopService { get; set; }
 
     public event EventHandler<AirPlaySession>? SessionStarted;
     public event EventHandler<AirPlaySession>? SessionEnded;
@@ -58,15 +72,15 @@ public sealed class AirPlayRequestHandler(AirPlayOptions options, DeviceIdentity
         return (request.Method, path) switch
         {
             ("OPTIONS", _) => HandleOptions(),
-            ("GET", "/info") => HandleInfo(),
-            ("POST", "/info") => HandleInfo(),
+            ("GET", "/info") => HandleInfo(request),
+            ("POST", "/info") => HandleInfo(request),
             ("POST", "/pair-setup") => HandlePairSetup(),
             ("POST", "/pair-verify") => HandlePairVerify(request, session),
             ("POST", "/fp-setup") => HandleFairPlaySetup(request, session),
             ("POST", "/pair-pin-start") => RtspResponse.Ok(),
             ("POST", "/feedback") => RtspResponse.Ok(),
             ("POST", "/audioMode") => RtspResponse.Ok(),
-            ("GET", "/stream.xml") => HandleInfo(),
+            ("GET", "/stream.xml") => HandleInfo(request),
             ("SETUP", _) => HandleSetup(request, session, cancellationToken),
             ("RECORD", _) => HandleRecord(session),
             ("SET_PARAMETER", _) => HandleSetParameter(request),
@@ -106,9 +120,32 @@ public sealed class AirPlayRequestHandler(AirPlayOptions options, DeviceIdentity
     /// <summary>
     /// Describes the receiver. The sender reads this before it commits to mirroring, and
     /// the "displays" entry in particular decides what resolution it will encode at.
+    /// <para>
+    /// There are two shapes of answer. iOS opens every session by asking for a specific
+    /// qualifier - "txtAirPlay" or "txtRAOP" - and for those it wants nothing but that
+    /// service's raw DNS-SD TXT record back. Answering the full device dictionary instead
+    /// looks like a malformed reply: the phone closes the connection and never proceeds to
+    /// pairing, which presents as a receiver that appears in Control Center and then does
+    /// nothing when tapped. Only a request with no qualifier gets the full description.
+    /// </para>
     /// </summary>
-    private RtspResponse HandleInfo()
+    private RtspResponse HandleInfo(RtspRequest request)
     {
+        if (TryReadQualifier(request) is { } qualifier)
+        {
+            var response = new PlistDictionary();
+
+            if (qualifier.Equals(TxtAirPlayKey, StringComparison.OrdinalIgnoreCase) && AirPlayService is not null)
+                response[TxtAirPlayKey] = AirPlayService.EncodeTxtRecordData();
+            else if (qualifier.Equals(TxtRaopKey, StringComparison.OrdinalIgnoreCase) && RaopService is not null)
+                response[TxtRaopKey] = RaopService.EncodeTxtRecordData();
+            else
+                _log.Warn($"/info asked for an unknown qualifier '{qualifier}'");
+
+            _log.Debug($"/info qualifier '{qualifier}' answered with {response.Count} entr(ies)");
+            return RtspResponse.BinaryPlistBody(response);
+        }
+
         var info = new PlistDictionary
         {
             ["deviceID"] = identity.DeviceId,
@@ -177,6 +214,18 @@ public sealed class AirPlayRequestHandler(AirPlayOptions options, DeviceIdentity
             ["inputLatencyMicros"] = 0,
             ["outputLatencyMicros"] = 0,
         };
+    }
+
+    /// <summary>
+    /// Reads the single qualifier string from an /info request body, or null when the
+    /// request carries no property list - which is how iOS asks for the full description.
+    /// </summary>
+    private static string? TryReadQualifier(RtspRequest request)
+    {
+        if (request.Body.Length == 0) return null;
+        if (request.BodyAsPlist() is not { } body) return null;
+        if (body.GetArray("qualifier") is not { Count: > 0 } qualifier) return null;
+        return qualifier[0] is PlistString name ? name.Value : null;
     }
 
     /// <summary>Legacy pair-setup: the sender just wants our long-term public key.</summary>

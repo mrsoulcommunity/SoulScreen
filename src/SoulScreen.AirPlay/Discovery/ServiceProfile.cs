@@ -43,5 +43,28 @@ public sealed class ServiceProfile
         else TxtEntries.Add(prefix + value);
     }
 
+    /// <summary>
+    /// The TXT entries in DNS record data form - each entry prefixed with its length.
+    /// <para>
+    /// This is not only for the mDNS responder. The first thing iOS asks a receiver over
+    /// HTTP is <c>GET /info</c> with a qualifier of "txtAirPlay", and the reply it expects
+    /// is exactly these bytes wrapped in a property list, so the two paths have to agree
+    /// byte for byte.
+    /// </para>
+    /// </summary>
+    public byte[] EncodeTxtRecordData()
+    {
+        var writer = new Core.Buffers.BufferWriter(256);
+        foreach (var entry in TxtEntries)
+        {
+            var bytes = System.Text.Encoding.UTF8.GetBytes(entry);
+            if (bytes.Length > 255)
+                throw new InvalidOperationException($"TXT entry is {bytes.Length} bytes; the limit is 255.");
+            writer.WriteUInt8((byte)bytes.Length);
+            writer.Write(bytes);
+        }
+        return writer.ToArray();
+    }
+
     public override string ToString() => $"{FullName} -> {HostName}:{Port} ({TxtEntries.Count} TXT)";
 }

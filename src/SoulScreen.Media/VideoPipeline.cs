@@ -1,6 +1,5 @@
 using System.Buffers;
 using System.Diagnostics;
-using System.Threading.Channels;
 using SoulScreen.Core.Logging;
 using SoulScreen.Core.Media;
 using SoulScreen.Core.Sources;
@@ -10,30 +9,48 @@ namespace SoulScreen.Media;
 /// <summary>
 /// Connects a mirror source to the H.264 decoder and hands finished pictures to a renderer.
 /// <para>
-/// The source raises samples on its receive thread, and decoding there would stall the
-/// socket. So samples are copied into a short bounded queue and decoded on a dedicated
-/// thread. The queue is deliberately tiny and drops the oldest entry when full: for a
-/// mirror, a frame that is already late is worth less than the one behind it, and letting
-/// the queue grow would trade latency for frames nobody wants to see.
+/// The source raises samples on its receive thread and decoding there would stall the
+/// socket, so samples are copied into a short queue and decoded on a dedicated thread.
+/// </para>
+/// <para>
+/// What the queue drops matters more than how deep it is. H.264 frames are not independent:
+/// discard one keyframe and every frame after it decodes to nothing until the phone happens
+/// to send another, which in mirroring can be seconds - long enough to look like a black
+/// screen rather than a dropped frame. So the queue drops the oldest <em>inter</em> frame,
+/// keeps keyframes, and after any drop skips ahead to the next keyframe instead of feeding
+/// the decoder frames whose references are gone.
 /// </para>
 /// </summary>
 public sealed class VideoPipeline : IAsyncDisposable
 {
     /// <summary>
-    /// Frames buffered between the network and the decoder. Three is enough to absorb a
-    /// scheduling hiccup without letting the picture drift behind the phone.
+    /// Frames buffered between the network and the decoder. Deep enough to absorb decoder
+    /// start-up and a scheduling hiccup, shallow enough that the picture cannot drift far
+    /// behind the phone.
     /// </summary>
-    private const int QueueDepth = 3;
+    private const int QueueDepth = 8;
 
     private readonly ILogger _log = Log.For("pipeline");
-    private readonly Channel<QueuedSample> _queue;
+    private readonly Queue<QueuedSample> _queue = new(QueueDepth);
+    private readonly object _queueLock = new();
+    private readonly SemaphoreSlim _queued = new(0);
     private readonly CancellationTokenSource _cts = new();
     private readonly Task _decodeLoop;
     private readonly Stopwatch _rateClock = Stopwatch.StartNew();
 
     private IMirrorSource? _source;
     private H264Decoder? _decoder;
+
+    /// <summary>SPS and PPS in Annex-B, prepended to each keyframe so the decoder can start
+    /// from any of them.</summary>
+    private byte[] _parameterSets = [];
+
+    /// <summary>Set after a drop: inter frames are skipped until the next keyframe.</summary>
+    private bool _needKeyFrame = true;
+
+    private bool _completed;
     private long _droppedSamples;
+    private long _skippedSamples;
     private long _decodedFrames;
     private long _framesAtLastSample;
     private double _framesPerSecond;
@@ -41,21 +58,6 @@ public sealed class VideoPipeline : IAsyncDisposable
     public VideoPipeline()
     {
         FFmpegRuntime.ThrowIfUnavailable();
-
-        _queue = Channel.CreateBounded<QueuedSample>(
-            new BoundedChannelOptions(QueueDepth)
-            {
-                FullMode = BoundedChannelFullMode.DropOldest,
-                SingleReader = true,
-                SingleWriter = false,
-            },
-            // Without this the pooled buffer behind a dropped sample would never come back.
-            dropped =>
-            {
-                Interlocked.Increment(ref _droppedSamples);
-                dropped.Dispose();
-            });
-
         _decodeLoop = Task.Run(() => DecodeLoopAsync(_cts.Token), CancellationToken.None);
     }
 
@@ -65,8 +67,11 @@ public sealed class VideoPipeline : IAsyncDisposable
     /// <summary>Pictures decoded since the pipeline started.</summary>
     public long DecodedFrameCount => Interlocked.Read(ref _decodedFrames);
 
-    /// <summary>Samples dropped because the decoder could not keep up.</summary>
+    /// <summary>Samples discarded because the decoder could not keep up.</summary>
     public long DroppedSampleCount => Interlocked.Read(ref _droppedSamples);
+
+    /// <summary>Inter frames skipped while waiting to resynchronise on a keyframe.</summary>
+    public long SkippedSampleCount => Interlocked.Read(ref _skippedSamples);
 
     /// <summary>Rolling decode rate, updated about once a second.</summary>
     public double FramesPerSecond => _framesPerSecond;
@@ -101,27 +106,76 @@ public sealed class VideoPipeline : IAsyncDisposable
     private void OnFormatChanged(object? sender, VideoFormat format)
     {
         Format = format;
-        FormatChanged?.Invoke(this, format);
 
-        // Queued as a sample of its own so the parameter sets reach the decoder ahead of
-        // the frames they describe, in the order the sender sent them.
+        // Held rather than queued as a packet of its own: a packet carrying only SPS and
+        // PPS makes the decoder report "no frame" and fail, so the sets ride along with the
+        // next keyframe instead.
         if (format.ParameterSets.Length > 0)
-            Enqueue(format.ParameterSets, 0, isConfiguration: true);
+        {
+            lock (_queueLock)
+            {
+                _parameterSets = format.ParameterSets;
+                // New geometry invalidates whatever the decoder was tracking.
+                _needKeyFrame = true;
+            }
+        }
+
+        FormatChanged?.Invoke(this, format);
     }
 
     private void OnSampleReady(object? sender, MediaSample sample)
     {
         // The sample's buffer is recycled the moment this returns, so copy before queueing.
-        Enqueue(sample.Span, sample.TimestampUs, isConfiguration: false);
+        var queued = QueuedSample.Copy(sample.Span, sample.TimestampUs, sample.IsKeyFrame);
+
+        QueuedSample? evicted = null;
+        lock (_queueLock)
+        {
+            if (_completed)
+            {
+                queued.Dispose();
+                return;
+            }
+
+            if (_queue.Count >= QueueDepth)
+            {
+                evicted = Evict();
+                // Everything still queued now has a hole in front of it, so resynchronise.
+                _needKeyFrame = true;
+                Interlocked.Increment(ref _droppedSamples);
+            }
+
+            _queue.Enqueue(queued);
+        }
+
+        evicted?.Dispose();
+        _queued.Release();
     }
 
-    private void Enqueue(ReadOnlySpan<byte> payload, long timestampUs, bool isConfiguration)
+    /// <summary>
+    /// Removes one sample to make room, preferring the oldest inter frame. Only if the queue
+    /// is nothing but keyframes does the oldest keyframe go, which cannot make things worse.
+    /// </summary>
+    private QueuedSample? Evict()
     {
-        var queued = QueuedSample.Copy(payload, timestampUs, isConfiguration);
-        if (_queue.Writer.TryWrite(queued)) return;
+        var retained = new List<QueuedSample>(_queue.Count);
+        QueuedSample? evicted = null;
 
-        // Only reachable once the channel is completed, i.e. during shutdown.
-        queued.Dispose();
+        while (_queue.Count > 0)
+        {
+            var candidate = _queue.Dequeue();
+            if (evicted is null && !candidate.IsKeyFrame) evicted = candidate;
+            else retained.Add(candidate);
+        }
+
+        if (evicted is null && retained.Count > 0)
+        {
+            evicted = retained[0];
+            retained.RemoveAt(0);
+        }
+
+        foreach (var sample in retained) _queue.Enqueue(sample);
+        return evicted;
     }
 
     private async Task DecodeLoopAsync(CancellationToken token)
@@ -138,12 +192,37 @@ public sealed class VideoPipeline : IAsyncDisposable
 
         try
         {
-            await foreach (var queued in _queue.Reader.ReadAllAsync(token).ConfigureAwait(false))
+            while (!token.IsCancellationRequested)
             {
-                using (queued)
+                await _queued.WaitAsync(token).ConfigureAwait(false);
+
+                QueuedSample? next;
+                byte[] parameterSets;
+                lock (_queueLock)
                 {
-                    DecodeOne(queued);
+                    if (_queue.Count == 0) continue;
+                    next = _queue.Dequeue();
+                    parameterSets = _parameterSets;
+
+                    if (_needKeyFrame)
+                    {
+                        if (!next.IsKeyFrame)
+                        {
+                            // Its references are gone; decoding it would only produce noise.
+                            Interlocked.Increment(ref _skippedSamples);
+                            var skipped = next;
+                            next = null;
+                            skipped.Dispose();
+                        }
+                        else
+                        {
+                            _needKeyFrame = false;
+                        }
+                    }
                 }
+
+                if (next is null) continue;
+                using (next) DecodeOne(next, parameterSets);
             }
         }
         catch (OperationCanceledException) { }
@@ -163,7 +242,7 @@ public sealed class VideoPipeline : IAsyncDisposable
         }
     }
 
-    private void DecodeOne(QueuedSample queued)
+    private void DecodeOne(QueuedSample queued, byte[] parameterSets)
     {
         var decoder = _decoder;
         if (decoder is null) return;
@@ -171,7 +250,26 @@ public sealed class VideoPipeline : IAsyncDisposable
         IReadOnlyList<DecodedVideoFrame> frames;
         try
         {
-            frames = decoder.Decode(queued.Span, queued.TimestampUs);
+            if (queued.IsKeyFrame && parameterSets.Length > 0)
+            {
+                // Prefix the keyframe with SPS and PPS so a decoder that has just started,
+                // or just been resynchronised, has everything it needs in one packet.
+                var combined = ArrayPool<byte>.Shared.Rent(parameterSets.Length + queued.Length);
+                try
+                {
+                    parameterSets.CopyTo(combined, 0);
+                    queued.Span.CopyTo(combined.AsSpan(parameterSets.Length));
+                    frames = decoder.Decode(combined.AsSpan(0, parameterSets.Length + queued.Length), queued.TimestampUs);
+                }
+                finally
+                {
+                    ArrayPool<byte>.Shared.Return(combined);
+                }
+            }
+            else
+            {
+                frames = decoder.Decode(queued.Span, queued.TimestampUs);
+            }
         }
         catch (Exception ex)
         {
@@ -213,17 +311,21 @@ public sealed class VideoPipeline : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         Detach();
-        _queue.Writer.TryComplete();
+
+        lock (_queueLock)
+        {
+            _completed = true;
+            while (_queue.Count > 0) _queue.Dequeue().Dispose();
+        }
+
         await _cts.CancelAsync().ConfigureAwait(false);
 
         try { await _decodeLoop.ConfigureAwait(false); }
         catch (OperationCanceledException) { }
 
-        // Anything still queued when the reader stopped still owns a pooled buffer.
-        while (_queue.Reader.TryRead(out var leftover)) leftover.Dispose();
-
         _cts.Dispose();
-        _log.Info($"pipeline closed: {DecodedFrameCount} frames decoded, {DroppedSampleCount} dropped");
+        _queued.Dispose();
+        _log.Info($"pipeline closed: {DecodedFrameCount} decoded, {DroppedSampleCount} dropped, {SkippedSampleCount} skipped");
     }
 
     /// <summary>A copy of one access unit, owned by the queue until the decoder consumes it.</summary>
@@ -231,29 +333,27 @@ public sealed class VideoPipeline : IAsyncDisposable
     {
         private byte[]? _buffer;
 
-        private QueuedSample(byte[] buffer, int length, long timestampUs, bool isConfiguration)
+        private QueuedSample(byte[] buffer, int length, long timestampUs, bool isKeyFrame)
         {
             _buffer = buffer;
             Length = length;
             TimestampUs = timestampUs;
-            IsConfiguration = isConfiguration;
+            IsKeyFrame = isKeyFrame;
         }
 
         public int Length { get; }
         public long TimestampUs { get; }
-
-        /// <summary>True for an SPS/PPS record rather than a picture.</summary>
-        public bool IsConfiguration { get; }
+        public bool IsKeyFrame { get; }
 
         public ReadOnlySpan<byte> Span => _buffer is null
             ? throw new ObjectDisposedException(nameof(QueuedSample))
             : _buffer.AsSpan(0, Length);
 
-        public static QueuedSample Copy(ReadOnlySpan<byte> payload, long timestampUs, bool isConfiguration)
+        public static QueuedSample Copy(ReadOnlySpan<byte> payload, long timestampUs, bool isKeyFrame)
         {
             var buffer = ArrayPool<byte>.Shared.Rent(Math.Max(payload.Length, 1));
             payload.CopyTo(buffer);
-            return new QueuedSample(buffer, payload.Length, timestampUs, isConfiguration);
+            return new QueuedSample(buffer, payload.Length, timestampUs, isKeyFrame);
         }
 
         public void Dispose()

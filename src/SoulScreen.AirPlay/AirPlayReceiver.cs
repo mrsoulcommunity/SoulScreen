@@ -79,6 +79,12 @@ public sealed class AirPlayReceiver : IMirrorSource
             await _rtsp.StartAsync(_options.Port, _cts.Token).ConfigureAwait(false);
 
             var (airplay, raop) = AirPlayAdvertisement.Build(_options, _identity);
+
+            // The control channel serves the same TXT records over /info, so it has to see
+            // the very profiles being advertised rather than build its own copy.
+            _handler.AirPlayService = airplay;
+            _handler.RaopService = raop;
+
             _responder.ClearServices();
             _responder.HostName = _options.DeviceName;
             _responder.Advertise(airplay);

@@ -109,6 +109,8 @@ public sealed class RtspServer(IRtspRequestHandler handler, string serverName = 
         var context = new RtspConnectionContext(remote, local);
         _log.Info($"connection from {remote}");
 
+        var requestCount = 0;
+
         try
         {
             // Mirroring is latency-sensitive and the control channel carries small
@@ -122,7 +124,13 @@ public sealed class RtspServer(IRtspRequestHandler handler, string serverName = 
                 var request = await reader.ReadRequestAsync(token).ConfigureAwait(false);
                 if (request is null) break; // clean close
 
-                if (Trace) _log.Debug($"<- {request}");
+                requestCount++;
+                if (Trace)
+                {
+                    _log.Debug($"<- {request}");
+                    foreach (var (key, value) in request.Headers) _log.Trace($"     {key}: {value}");
+                    if (request.Body.Length > 0) _log.Trace($"     body:\n{Hex.Dump(request.Body, 192)}");
+                }
 
                 RtspResponse response;
                 try
@@ -153,7 +161,18 @@ public sealed class RtspServer(IRtspRequestHandler handler, string serverName = 
             try { handler.OnConnectionClosed(context); }
             catch (Exception ex) { _log.Warn("connection teardown failed", ex); }
             client.Dispose();
-            _log.Info($"connection from {remote} closed");
+
+            if (requestCount == 0)
+            {
+                // A sender that opens a socket and says nothing is doing a reachability
+                // probe, not starting a session. Worth calling out: it looks identical to a
+                // failed session in a summary log, and the two need very different fixes.
+                _log.Info($"connection from {remote} closed without sending a request (reachability probe)");
+            }
+            else
+            {
+                _log.Info($"connection from {remote} closed after {requestCount} request(s)");
+            }
         }
     }
 
@@ -249,16 +268,19 @@ internal sealed class RtspStreamReader(Stream stream)
     /// <summary>Returns the offset of the CRLFCRLF that ends the header block, or -1 on a clean close.</summary>
     private async Task<int> ReadUntilHeaderEndAsync(CancellationToken token)
     {
-        var searchFrom = _consumed;
+        // Tracked relative to _consumed, not as an absolute index: FillAsync may compact the
+        // buffer and shift everything down, which would leave an absolute cursor pointing
+        // past the terminator and hang the connection waiting for bytes already received.
+        var scanned = 0;
+
         while (true)
         {
-            var index = IndexOfHeaderEnd(searchFrom);
+            var index = IndexOfHeaderEnd(_consumed + Math.Max(0, scanned - 3));
             if (index >= 0) return index;
 
-            // Everything buffered so far is header, so resume the scan just before the tail.
-            searchFrom = Math.Max(_consumed, _length - 3);
+            scanned = _length - _consumed;
 
-            if (_length - _consumed > MaxHeaderBytes)
+            if (scanned > MaxHeaderBytes)
                 throw new InvalidDataException("RTSP header block is implausibly large.");
 
             if (!await FillAsync(token).ConfigureAwait(false))
@@ -274,6 +296,9 @@ internal sealed class RtspStreamReader(Stream stream)
                 return i;
         return -1;
     }
+
+    /// <summary>Bytes received but not yet parsed into a request.</summary>
+    public int PendingByteCount => _length - _consumed;
 
     private async Task<byte[]> ReadExactlyAsync(int count, CancellationToken token)
     {
