@@ -15,16 +15,16 @@ namespace SoulScreen.App.Rendering;
 /// makes WPF rebuild its render-side resource each time, which is plainly visible as flicker.
 /// </para>
 /// <para>
-/// The decode thread hands pictures over through a three-slot buffer, and the UI thread
-/// copies the newest into the section during the render pass that will show it. Writing the
-/// section only on the UI thread, immediately before composition, is what keeps a half-drawn
-/// frame from ever reaching the screen.
+/// The decode thread hands pictures over through a shallow queue, and the UI thread copies
+/// one into the section during each render pass. Writing the section only on the UI thread,
+/// immediately before composition, is what keeps a half-drawn frame from reaching the
+/// screen; releasing one picture per pass is what spreads a burst of arrivals back out
+/// instead of showing only the last of them.
 /// </para>
 /// <para>
-/// Presentation is paced by the compositor rather than by arrival: whatever picture is in
-/// the buffer when a frame is composed is the one shown. A phone sending faster than the
-/// display refreshes simply has its extra frames overwritten, which is what keeps the image
-/// current instead of progressively late.
+/// The queue is deliberately shallow. Anything held is latency, so beyond a couple of frames
+/// the oldest are discarded rather than played out: a picture that is behind is worse than
+/// one that skipped.
 /// </para>
 /// </summary>
 public sealed class VideoSurface : Image, IDisposable
@@ -65,6 +65,15 @@ public sealed class VideoSurface : Image, IDisposable
     private long _latencySumMicroseconds;
     private long _latencySamples;
 
+    /// <summary>Composition passes seen, for the achieved refresh rate.</summary>
+    private long _compositionPasses;
+
+    private readonly System.Diagnostics.Stopwatch _rateClock = System.Diagnostics.Stopwatch.StartNew();
+    private long _presentedAtLastSample;
+    private long _passesAtLastSample;
+    private double _presentedPerSecond;
+    private double _compositionPerSecond;
+
     public VideoSurface()
     {
         Stretch = Stretch.Uniform;
@@ -88,6 +97,16 @@ public sealed class VideoSurface : Image, IDisposable
 
     /// <summary>Size of the picture currently displayed, or empty before the first frame.</summary>
     public Size VideoSize { get; private set; }
+
+    /// <summary>Pictures reaching the screen per second - what motion actually looks like.</summary>
+    public double PresentedPerSecond => _presentedPerSecond;
+
+    /// <summary>
+    /// Composition passes per second, which is the display's refresh rate as WPF sees it.
+    /// A source rate that is not a whole fraction of this judders no matter how even the
+    /// frames arrive, because each one has to be held for a varying number of refreshes.
+    /// </summary>
+    public double CompositionPerSecond => _compositionPerSecond;
 
     /// <summary>
     /// Mean time from a picture leaving the decoder to reaching the screen. The render half
@@ -136,7 +155,8 @@ public sealed class VideoSurface : Image, IDisposable
         if (source.Length < slots.ByteCount) return;
         Array.Copy(source, destination, slots.ByteCount);
 
-        if (slots.Publish()) Interlocked.Increment(ref _supersededFrames);
+        var discarded = slots.Publish();
+        if (discarded > 0) Interlocked.Add(ref _supersededFrames, discarded);
     }
 
     /// <summary>Clears the surface, e.g. when a session ends. Safe from any thread.</summary>
@@ -241,10 +261,13 @@ public sealed class VideoSurface : Image, IDisposable
     {
         if (_retired.Count > 0) DrainRetired();
 
+        Interlocked.Increment(ref _compositionPasses);
+        UpdateRates();
+
         // Only this thread assigns these, so no lock is needed to read them.
         var buffer = _buffer;
         var slots = _slots;
-        if (buffer is null || slots is null || !slots.HasReady) return;
+        if (buffer is null || slots is null) return;
 
         var picture = slots.BeginRead();
         if (picture is null) return;
@@ -272,6 +295,22 @@ public sealed class VideoSurface : Image, IDisposable
         }
     }
 
+    private void UpdateRates()
+    {
+        var elapsed = _rateClock.Elapsed;
+        if (elapsed.TotalSeconds < 1) return;
+
+        var presented = Interlocked.Read(ref _presentedFrames);
+        var passes = Interlocked.Read(ref _compositionPasses);
+
+        _presentedPerSecond = (presented - _presentedAtLastSample) / elapsed.TotalSeconds;
+        _compositionPerSecond = (passes - _passesAtLastSample) / elapsed.TotalSeconds;
+
+        _presentedAtLastSample = presented;
+        _passesAtLastSample = passes;
+        _rateClock.Restart();
+    }
+
     /// <summary>Takes a snapshot of what is on screen right now, or null before the first frame.</summary>
     public BitmapSource? Snapshot()
     {
@@ -285,6 +324,10 @@ public sealed class VideoSurface : Image, IDisposable
         Interlocked.Exchange(ref _supersededFrames, 0);
         Interlocked.Exchange(ref _latencySumMicroseconds, 0);
         Interlocked.Exchange(ref _latencySamples, 0);
+        Interlocked.Exchange(ref _compositionPasses, 0);
+        _presentedAtLastSample = 0;
+        _passesAtLastSample = 0;
+        _rateClock.Restart();
     }
 
     public void Dispose()

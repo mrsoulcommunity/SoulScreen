@@ -1,31 +1,40 @@
 namespace SoulScreen.App.Rendering;
 
 /// <summary>
-/// A three-slot hand-off of decoded pictures between the decode thread and the UI thread.
+/// A small hand-off queue of decoded pictures between the decode thread and the UI thread.
 /// <para>
-/// Three, not one: with a single buffer the writer would overwrite pixels the reader is
-/// still copying out, which tears. Three is the smallest count where a writer, a reader and
-/// a queued picture can each own one, so neither side ever waits for the other and the only
-/// synchronised work is swapping a pair of indices.
+/// It is a queue rather than a single latest-wins slot because arrival is not even. Frames
+/// leave the phone at a steady rate but reach the decoder in bursts, and showing only the
+/// newest at each composition pass turns that jitter straight into uneven motion: two frames
+/// arriving together means one is never seen. Releasing one per pass instead spreads a burst
+/// back out, which is what the eye reads as smooth.
 /// </para>
 /// <para>
-/// The slots hold managed arrays rather than the shared section itself, so that the section
-/// - which WPF reads asynchronously - is only ever written on the UI thread, immediately
-/// before the frame it belongs to is composed.
+/// The queue stays shallow on purpose. Every frame held is latency, so once it is deeper
+/// than <see cref="MaxHeldFrames"/> the oldest are discarded rather than played out - a
+/// picture that is behind is worse than one that skipped.
 /// </para>
 /// </summary>
 internal sealed class FrameSlots
 {
-    private const int SlotCount = 3;
+    /// <summary>
+    /// Slots in the pool: enough for the writer, the reader, and a couple queued between
+    /// them.
+    /// </summary>
+    private const int SlotCount = 5;
+
+    /// <summary>
+    /// How many finished pictures may wait. Two is one composition pass of slack at any
+    /// sensible refresh rate, which absorbs jitter without adding visible delay.
+    /// </summary>
+    private const int MaxHeldFrames = 2;
 
     private readonly byte[][] _slots = new byte[SlotCount][];
+    private readonly Queue<int> _ready = new(SlotCount);
     private readonly object _lock = new();
 
     /// <summary>Slot the decode thread is filling.</summary>
     private int _writeIndex;
-
-    /// <summary>Slot holding a finished picture not yet taken, or -1.</summary>
-    private int _readyIndex = -1;
 
     /// <summary>Slot the UI thread is copying out of, or -1.</summary>
     private int _readingIndex = -1;
@@ -38,10 +47,10 @@ internal sealed class FrameSlots
 
     public int ByteCount { get; }
 
-    /// <summary>True when a finished picture is waiting to be shown.</summary>
-    public bool HasReady
+    /// <summary>Finished pictures waiting to be shown.</summary>
+    public int QueuedCount
     {
-        get { lock (_lock) return _readyIndex >= 0; }
+        get { lock (_lock) return _ready.Count; }
     }
 
     /// <summary>The array to fill. Safe from the writing thread until <see cref="Publish"/>.</summary>
@@ -51,31 +60,37 @@ internal sealed class FrameSlots
     }
 
     /// <summary>
-    /// Marks the slot just filled as the one to show, and moves the writer to a free slot.
+    /// Queues the slot just filled and moves the writer on.
     /// </summary>
-    /// <returns>True when this replaced a picture that was never shown.</returns>
-    public bool Publish()
+    /// <returns>The number of older pictures discarded to stay within the depth limit.</returns>
+    public int Publish()
     {
         lock (_lock)
         {
-            var superseded = _readyIndex >= 0;
-            _readyIndex = _writeIndex;
+            _ready.Enqueue(_writeIndex);
+
+            var discarded = 0;
+            while (_ready.Count > MaxHeldFrames)
+            {
+                _ready.Dequeue();
+                discarded++;
+            }
+
             _writeIndex = NextFree();
-            return superseded;
+            return discarded;
         }
     }
 
     /// <summary>
-    /// Takes the waiting picture, or null when none has arrived. The array stays valid until
-    /// the matching <see cref="EndRead"/>.
+    /// Takes the oldest waiting picture, or null when none has arrived. The array stays
+    /// valid until the matching <see cref="EndRead"/>.
     /// </summary>
     public byte[]? BeginRead()
     {
         lock (_lock)
         {
-            if (_readyIndex < 0) return null;
-            _readingIndex = _readyIndex;
-            _readyIndex = -1;
+            if (_ready.Count == 0) return null;
+            _readingIndex = _ready.Dequeue();
             return _slots[_readingIndex];
         }
     }
@@ -86,15 +101,17 @@ internal sealed class FrameSlots
         lock (_lock) _readingIndex = -1;
     }
 
-    /// <summary>Picks a slot that is neither waiting to be shown nor being read.</summary>
+    /// <summary>Picks a slot that is neither queued nor being read.</summary>
     private int NextFree()
     {
         for (var offset = 1; offset <= SlotCount; offset++)
         {
             var candidate = (_writeIndex + offset) % SlotCount;
-            if (candidate != _readyIndex && candidate != _readingIndex) return candidate;
+            if (candidate == _readingIndex) continue;
+            if (_ready.Contains(candidate)) continue;
+            return candidate;
         }
-        // Unreachable with three slots and at most two reserved.
+        // Unreachable: at most MaxHeldFrames + 1 slots are ever spoken for.
         return _writeIndex;
     }
 }

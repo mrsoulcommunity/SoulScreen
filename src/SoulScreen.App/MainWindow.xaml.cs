@@ -42,6 +42,8 @@ public partial class MainWindow : Window
     private bool _isFullscreen;
     private bool _adjustedForVideoSize;
     private bool _shuttingDown;
+    private bool _cadenceWarned;
+    private bool _noticeDismissed;
 
     public MainWindow()
     {
@@ -121,7 +123,7 @@ public partial class MainWindow : Window
                 "Windows is compositing this window in software",
                 "Usually a remote desktop session or a missing graphics driver. Mirroring will " +
                 "work but the picture will stutter.",
-                AboutReceiver: false));
+                WarningKind.Machine));
         }
     }
 
@@ -325,6 +327,8 @@ public partial class MainWindow : Window
         StatusDot.Fill = (Brush)FindResource("Success");
         // Figures from a previous session would make the first seconds of this one unreadable.
         Video.ResetStatistics();
+        _cadenceWarned = false;
+        _noticeDismissed = false;
 
         // Windows measures idleness by input, so without this the monitor blanks part-way
         // through watching a mirrored phone.
@@ -343,6 +347,7 @@ public partial class MainWindow : Window
         RecordButton.IsChecked = false;
         RecordButton.Visibility = Visibility.Collapsed;
         MuteButton.Visibility = Visibility.Collapsed;
+        NoticeBar.Visibility = Visibility.Collapsed;
         Video.Clear();
 
         DisplaySleep.Release();
@@ -369,7 +374,7 @@ public partial class MainWindow : Window
     {
         // Keep anything that is not about the receiver, such as the render-tier notice.
         for (var i = _warnings.Count - 1; i >= 0; i--)
-            if (_warnings[i].AboutReceiver) _warnings.RemoveAt(i);
+            if (_warnings[i].Kind == WarningKind.Receiver) _warnings.RemoveAt(i);
 
         if (!NativeFairPlay.IsAvailable)
         {
@@ -723,14 +728,18 @@ public partial class MainWindow : Window
         if (_pipeline.DecodedFrameCount > 0)
             parts.Add($"{_pipeline.FramesPerSecond:0.#} fps");
 
-        // Decode-to-screen time. Frames superseded within one composition pass are normal
-        // when the phone outruns the monitor, so they are not reported as a problem;
-        // genuinely dropped or skipped samples are.
+        // The display rate belongs next to the source rate: how smooth the motion looks
+        // depends on the ratio between them far more than on either number alone.
+        var refresh = Video.CompositionPerSecond;
+        if (refresh > 0) parts.Add($"{refresh:0} Hz");
+
         var latency = Video.AveragePresentLatencyMilliseconds;
         if (latency > 0) parts.Add($"{latency:0.#} ms");
 
-        var lost = _pipeline.DroppedSampleCount + _pipeline.SkippedSampleCount;
+        var lost = _pipeline.DroppedSampleCount + _pipeline.SkippedSampleCount + Video.SupersededFrameCount;
         if (lost > 0) parts.Add($"{lost} lost");
+
+        CheckCadence(_pipeline.FramesPerSecond, refresh);
         if (_audio is { IsPlaying: true })
             parts.Add(_audio.Muted ? "muted" : $"audio {_audio.BufferedDuration.TotalMilliseconds:0} ms");
         if (_pipeline.IsRecording)
@@ -750,6 +759,57 @@ public partial class MainWindow : Window
         }
 
         MetricsText.Text = string.Join("   ", parts);
+    }
+
+    /// <summary>
+    /// Warns when the display refresh rate is not a whole multiple of the rate the phone is
+    /// sending.
+    /// <para>
+    /// At 100 Hz with a 60 fps source each picture has to be held for either one refresh or
+    /// two, in a repeating but uneven pattern. The motion judders, and no amount of work in
+    /// this application can prevent it - the only fix is to make the two rates divide. It is
+    /// worth naming because every other number on screen looks healthy while it happens.
+    /// </para>
+    /// </summary>
+    private void CheckCadence(double sourceRate, double refreshRate)
+    {
+        if (sourceRate < 5 || refreshRate < 5) return;
+
+        var ratio = refreshRate / sourceRate;
+        var nearestWhole = Math.Round(ratio);
+        var mismatched = nearestWhole >= 1 && Math.Abs(ratio - nearestWhole) > 0.12;
+
+        if (mismatched == _cadenceWarned) return;
+        _cadenceWarned = mismatched;
+
+        for (var i = _warnings.Count - 1; i >= 0; i--)
+            if (_warnings[i].Kind == WarningKind.Cadence) _warnings.RemoveAt(i);
+
+        if (!mismatched)
+        {
+            NoticeBar.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var title = $"Your display runs at {refreshRate:0} Hz and the phone is sending {sourceRate:0} fps";
+        var detail = $"That is {ratio:0.00} refreshes per frame, so each one is held for an uneven number of " +
+                     "them and the motion judders. Setting the display to 60 Hz while mirroring makes it one to one.";
+
+        _warnings.Add(new WarningItem(title, detail, WarningKind.Cadence));
+
+        // The idle panel is hidden while streaming, which is exactly when this matters.
+        if (_noticeDismissed) return;
+        NoticeTitle.Text = title;
+        NoticeDetail.Text = detail;
+        NoticeBar.Visibility = Visibility.Visible;
+    }
+
+    private void OnDismissNotice(object sender, RoutedEventArgs e)
+    {
+        // Dismissed for this session only: the rate can change, and a fresh session should
+        // say so again rather than stay silent about a problem the user may have forgotten.
+        _noticeDismissed = true;
+        NoticeBar.Visibility = Visibility.Collapsed;
     }
 
     // -------------------------------------------------------------------- log
@@ -818,12 +878,17 @@ public partial class MainWindow : Window
         Close();
     }
 
-    /// <summary>
-    /// A blocking setup problem, shown on the idle screen.
-    /// </summary>
-    /// <param name="AboutReceiver">
-    /// True for problems re-evaluated each time the receiver starts. False for facts about
-    /// the machine, which are established once and must survive that refresh.
-    /// </param>
-    private sealed record WarningItem(string Title, string Detail, bool AboutReceiver = true);
+    /// <summary>What produced a warning, and therefore what clears it again.</summary>
+    private enum WarningKind
+    {
+        /// <summary>Re-evaluated whenever the receiver starts.</summary>
+        Receiver,
+        /// <summary>A fact about this machine, established once.</summary>
+        Machine,
+        /// <summary>Refresh rate against source rate; re-evaluated while streaming.</summary>
+        Cadence,
+    }
+
+    /// <summary>Something worth telling the user about, shown on the idle screen.</summary>
+    private sealed record WarningItem(string Title, string Detail, WarningKind Kind = WarningKind.Receiver);
 }

@@ -90,6 +90,31 @@
                 <rendering:VideoSurface x:Name="Video" />
             </Border>
 
+            <!-- Sits over the picture, because the thing it explains is only visible while
+                 the picture is on screen and the idle panel is hidden. -->
+            <Border x:Name="NoticeBar" Visibility="Collapsed" VerticalAlignment="Top" Panel.ZIndex="10"
+                    Background="#F21A1508" BorderBrush="#59FBBF24" BorderThickness="0,0,0,1">
+                <Grid Margin="14,10">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" Text="&#xE7BA;" FontFamily="{StaticResource IconFont}"
+                               Foreground="{StaticResource Warning}" FontSize="14"
+                               VerticalAlignment="Top" Margin="0,1,11,0" />
+                    <StackPanel Grid.Column="1">
+                        <TextBlock x:Name="NoticeTitle" FontSize="12.5" FontWeight="SemiBold"
+                                   TextWrapping="Wrap" />
+                        <TextBlock x:Name="NoticeDetail" Style="{StaticResource Caption}"
+                                   TextWrapping="Wrap" Margin="0,3,0,0" />
+                    </StackPanel>
+                    <Button Grid.Column="2" Style="{StaticResource IconButton}" Content="&#xE8BB;"
+                            FontSize="11" Width="26" Height="26" VerticalAlignment="Top"
+                            ToolTip="Dismiss" Click="OnDismissNotice" />
+                </Grid>
+            </Border>
+
             <!-- Idle: what to do next, and anything blocking it. -->
             <ScrollViewer x:Name="IdlePanel" VerticalScrollBarVisibility="Auto" Padding="0,0,4,0">
                 <!-- A ScrollViewer measures its content with unbounded height, so centring
