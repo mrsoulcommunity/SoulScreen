@@ -29,6 +29,7 @@ public partial class MainWindow : Window
     private AppSettings _settings = null!;
     private AirPlayReceiver? _receiver;
     private VideoPipeline? _pipeline;
+    private AudioPipeline? _audio;
 
     private WindowState _stateBeforeFullscreen = WindowState.Normal;
     private bool _isFullscreen;
@@ -70,6 +71,8 @@ public partial class MainWindow : Window
     private async void OnLoaded(object sender, RoutedEventArgs e)
     {
         _settings = AppSettings.Load();
+        // Protocol tracing is only useful if the sink lets trace entries through.
+        Log.MinimumLevel = _settings.TraceProtocol ? LogLevel.Trace : LogLevel.Debug;
         ApplySettingsToChrome();
         PopulateSettingsForm();
         RefreshWarnings();
@@ -109,10 +112,17 @@ public partial class MainWindow : Window
             _pipeline = null;
         }
 
+        if (_settings.EnableAudio && FFmpegRuntime.IsAvailable)
+        {
+            _audio = new AudioPipeline { Muted = MuteButton.IsChecked == true };
+            _audio.FormatChanged += (_, format) => Dispatcher.BeginInvoke(() => _log.Info($"audio: {format}"));
+        }
+
         _receiver = new AirPlayReceiver(_settings.ToAirPlayOptions());
         _receiver.StateChanged += OnReceiverStateChanged;
         _receiver.VideoFormatChanged += OnVideoFormatChanged;
-        if (_pipeline is not null) _pipeline.Attach(_receiver);
+        _pipeline?.Attach(_receiver);
+        _audio?.Attach(_receiver);
 
         try
         {
@@ -147,6 +157,10 @@ public partial class MainWindow : Window
             pipeline.FrameDecoded -= OnFrameDecoded;
             await pipeline.DisposeAsync();
         }
+
+        var audio = _audio;
+        _audio = null;
+        if (audio is not null) await audio.DisposeAsync();
 
         if (!_shuttingDown)
         {
@@ -359,7 +373,19 @@ public partial class MainWindow : Window
                 SaveSnapshot();
                 e.Handled = true;
                 break;
+            case Key.M when Keyboard.Modifiers == ModifierKeys.Control:
+                MuteButton.IsChecked = MuteButton.IsChecked != true;
+                e.Handled = true;
+                break;
         }
+    }
+
+    private void OnMuteChanged(object sender, RoutedEventArgs e)
+    {
+        var muted = MuteButton.IsChecked == true;
+        MuteButton.Content = muted ? "" : "";
+        MuteButton.ToolTip = muted ? "Unmute the phone's audio (Ctrl+M)" : "Mute the phone's audio (Ctrl+M)";
+        if (_audio is not null) _audio.Muted = muted;
     }
 
     private void OnSnapshot(object sender, RoutedEventArgs e) => SaveSnapshot();
@@ -513,6 +539,8 @@ public partial class MainWindow : Window
             parts.Add($"{_pipeline.FramesPerSecond:0.#} fps");
         if (_pipeline.DroppedSampleCount > 0)
             parts.Add($"{_pipeline.DroppedSampleCount} dropped");
+        if (_audio is { IsPlaying: true })
+            parts.Add(_audio.Muted ? "muted" : $"audio {_audio.BufferedDuration.TotalMilliseconds:0} ms");
 
         MetricsText.Text = string.Join("   ", parts);
     }

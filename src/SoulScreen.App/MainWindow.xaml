@@ -39,6 +39,9 @@
 
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <ToggleButton x:Name="MuteButton" Style="{StaticResource IconToggle}" Content="&#xE767;"
+                                  ToolTip="Mute the phone's audio (Ctrl+M)"
+                                  Checked="OnMuteChanged" Unchecked="OnMuteChanged" />
                     <Button x:Name="SnapshotButton" Style="{StaticResource IconButton}" Content="&#xE722;"
                             ToolTip="Save a screenshot (Ctrl+S)" Click="OnSnapshot" IsEnabled="False" />
                     <ToggleButton x:Name="PinButton" Style="{StaticResource IconToggle}" Content="&#xE718;"
