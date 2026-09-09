@@ -10,41 +10,58 @@ namespace SoulScreen.App.Rendering;
 /// <summary>
 /// Displays decoded frames.
 /// <para>
-/// The decode thread writes each picture straight into shared memory the compositor reads
-/// from, and the UI thread does nothing per frame but swap a reference and invalidate. That
-/// is one copy from the decoder to the screen instead of the three a WriteableBitmap costs,
-/// and the UI thread never holds anything the decoder is waiting on: the one lock they share
-/// is taken by the UI thread only when the picture geometry changes.
+/// The picture reaches the screen through a shared memory section WPF draws straight out of.
+/// The image source is assigned once per geometry and never replaced: swapping it per frame
+/// makes WPF rebuild its render-side resource each time, which is plainly visible as flicker.
 /// </para>
 /// <para>
-/// Presentation is paced by the compositor rather than by arrival: whatever picture is
-/// newest when a frame is composed is the one shown. A phone sending faster than the display
-/// refreshes simply has its extra frames superseded, which is what keeps the image current
-/// instead of progressively late.
+/// The decode thread hands pictures over through a three-slot buffer, and the UI thread
+/// copies the newest into the section during the render pass that will show it. Writing the
+/// section only on the UI thread, immediately before composition, is what keeps a half-drawn
+/// frame from ever reaching the screen.
+/// </para>
+/// <para>
+/// Presentation is paced by the compositor rather than by arrival: whatever picture is in
+/// the buffer when a frame is composed is the one shown. A phone sending faster than the
+/// display refreshes simply has its extra frames overwritten, which is what keeps the image
+/// current instead of progressively late.
 /// </para>
 /// </summary>
 public sealed class VideoSurface : Image, IDisposable
 {
     /// <summary>
-    /// Composition passes a retired ring is kept mapped for. Three is comfortably more than
-    /// the one frame WPF's render thread can still be holding.
+    /// Composition passes a replaced buffer is kept mapped for. WPF's render thread reads a
+    /// section asynchronously and can still be drawing one we have stopped using, so a
+    /// rotation frees the old memory a few frames late rather than immediately.
     /// </summary>
-    private const int RetireDelayFrames = 3;
+    private const int RetireDelayFrames = 4;
 
     private readonly ILogger _log = Log.For("surface");
-    private readonly object _ringLock = new();
 
-    /// <summary>Rings waiting out their delay before the memory is unmapped. UI thread only.</summary>
-    private readonly List<(FrameBufferRing Ring, int FramesRemaining)> _retired = [];
+    /// <summary>
+    /// Guards which buffer and slots are current. Held only long enough to read or swap
+    /// those references - never across a copy - so the decode thread is never made to wait
+    /// on the UI thread.
+    /// </summary>
+    private readonly object _bufferLock = new();
 
-    private FrameBufferRing? _ring;
+    /// <summary>Buffers waiting out their delay before release. UI thread only.</summary>
+    private readonly List<(SharedFrameBuffer Buffer, int FramesRemaining)> _retired = [];
 
-    /// <summary>Geometry requested by the decoder but not yet allocated on the UI thread.</summary>
+    private SharedFrameBuffer? _buffer;
+
+    /// <summary>Hand-off between the decode thread and the UI thread.</summary>
+    private FrameSlots? _slots;
+
+    /// <summary>Geometry the decoder asked for but the UI thread has not allocated yet.</summary>
     private (int Width, int Height)? _pendingGeometry;
+
+    /// <summary>When the picture waiting in the slots left the decoder.</summary>
+    private DateTime _frameDecodedAtUtc;
 
     private bool _renderingHooked;
     private long _presentedFrames;
-    private long _skippedPresents;
+    private long _supersededFrames;
     private long _latencySumMicroseconds;
     private long _latencySamples;
 
@@ -55,29 +72,26 @@ public sealed class VideoSurface : Image, IDisposable
         // resampled in software and costs milliseconds per frame at this size; bilinear runs
         // on the GPU and is indistinguishable on moving video.
         RenderOptions.SetBitmapScalingMode(this, BitmapScalingMode.Linear);
-        RenderOptions.SetCachingHint(this, CachingHint.Unspecified);
-        SnapsToDevicePixels = true;
 
         Loaded += (_, _) => HookRendering();
         Unloaded += (_, _) => UnhookRendering();
     }
 
-    /// <summary>Pictures actually drawn, at most one per composition pass.</summary>
+    /// <summary>Pictures drawn, at most one per composition pass.</summary>
     public long PresentedFrameCount => Interlocked.Read(ref _presentedFrames);
 
     /// <summary>
-    /// Pictures superseded before they could be drawn, because another arrived within the
-    /// same composition pass. Expected when the phone outruns the display.
+    /// Pictures overwritten before they could be drawn, because another arrived within the
+    /// same composition pass. Expected whenever the phone outruns the display.
     /// </summary>
-    public long SkippedPresentCount => Interlocked.Read(ref _skippedPresents);
+    public long SupersededFrameCount => Interlocked.Read(ref _supersededFrames);
 
     /// <summary>Size of the picture currently displayed, or empty before the first frame.</summary>
     public Size VideoSize { get; private set; }
 
     /// <summary>
-    /// Mean time between a picture leaving the decoder and reaching the screen, over the
-    /// samples taken so far. Only the render half of the path; it does not include the
-    /// network or the decode itself.
+    /// Mean time from a picture leaving the decoder to reaching the screen. The render half
+    /// of the path only; it does not include the network or the decode itself.
     /// </summary>
     public double AveragePresentLatencyMilliseconds
     {
@@ -97,31 +111,32 @@ public sealed class VideoSurface : Image, IDisposable
     /// </summary>
     public void Present(DecodedVideoFrame frame)
     {
-        // The lock spans the copy, not just the field read. Unmapping a section while this
-        // thread is writing into it would fault, and a rotation does exactly that. It is
-        // uncontended on every ordinary frame: the only other taker is a ring swap.
-        lock (_ringLock)
+        FrameSlots? slots;
+        lock (_bufferLock)
         {
-            var ring = _ring;
-            if (ring is null || ring.Width != frame.Width || ring.Height != frame.Height)
+            var buffer = _buffer;
+            if (buffer is null || buffer.Width != frame.Width || buffer.Height != frame.Height)
             {
-                // Allocating the images has to happen on the dispatcher that owns them, so
-                // note the geometry and drop this picture; the next lands in the new ring.
+                // The image belongs to the dispatcher, so allocation has to happen there.
+                // This picture is dropped; the next one lands in the new buffer.
                 RequestGeometryLocked(frame.Width, frame.Height);
                 return;
             }
 
-            var buffer = frame.Buffer;
-            var byteCount = ring.ByteCount;
-            if (buffer.Length < byteCount) return;
-
-            // A memcpy into the shared section: the single copy between decoder and screen.
-            System.Runtime.InteropServices.Marshal.Copy(buffer, 0, ring.BeginWrite(), byteCount);
-
-            // A picture still queued when the next is published was never shown.
-            if (ring.HasPending) Interlocked.Increment(ref _skippedPresents);
-            ring.PublishFrom(frame.DecodedAtUtc);
+            slots = _slots;
+            _frameDecodedAtUtc = frame.DecodedAtUtc;
         }
+
+        if (slots is null) return;
+
+        // Outside the lifetime lock: the slots outlive a geometry change independently, and
+        // this copy is the longest thing on this path.
+        var destination = slots.BeginWrite();
+        var source = frame.Buffer;
+        if (source.Length < slots.ByteCount) return;
+        Array.Copy(source, destination, slots.ByteCount);
+
+        if (slots.Publish()) Interlocked.Increment(ref _supersededFrames);
     }
 
     /// <summary>Clears the surface, e.g. when a session ends. Safe from any thread.</summary>
@@ -138,80 +153,73 @@ public sealed class VideoSurface : Image, IDisposable
         Source = null;
         VideoSize = default;
 
-        lock (_ringLock)
+        lock (_bufferLock)
         {
-            Retire(_ring);
-            _ring = null;
+            Retire(_buffer);
+            _buffer = null;
+            _slots = null;
             _pendingGeometry = null;
         }
     }
 
-    /// <summary>Records a geometry to allocate. Caller must hold <see cref="_ringLock"/>.</summary>
+    /// <summary>Notes a geometry to allocate. Caller must hold <see cref="_bufferLock"/>.</summary>
     private void RequestGeometryLocked(int width, int height)
     {
         if (_pendingGeometry is { } pending && pending.Width == width && pending.Height == height) return;
         _pendingGeometry = (width, height);
-        Dispatcher.BeginInvoke(() => AllocateRing(width, height));
+        Dispatcher.BeginInvoke(() => Allocate(width, height));
     }
 
-    private void AllocateRing(int width, int height)
+    private void Allocate(int width, int height)
     {
-        FrameBufferRing created;
+        SharedFrameBuffer created;
         try
         {
-            created = FrameBufferRing.Create(width, height);
+            created = SharedFrameBuffer.Create(width, height);
         }
         catch (Exception ex)
         {
-            _log.Error($"could not allocate {width}x{height} frame buffers", ex);
-            lock (_ringLock) _pendingGeometry = null;
+            _log.Error($"could not allocate a {width}x{height} frame buffer", ex);
+            lock (_bufferLock) _pendingGeometry = null;
             return;
         }
 
-        lock (_ringLock)
+        lock (_bufferLock)
         {
-            Retire(_ring);
-            _ring = created;
+            Retire(_buffer);
+            _buffer = created;
+            _slots = new FrameSlots(created.ByteCount);
             _pendingGeometry = null;
         }
 
-        Source = null;
+        // Assigned once for this geometry. Every subsequent frame is an Invalidate on the
+        // same image, which is what keeps WPF from rebuilding its texture each frame.
+        Source = created.Bitmap;
         VideoSize = new Size(width, height);
-        _log.Info($"frame buffers allocated for {width}x{height}");
+        _log.Info($"frame buffer allocated for {width}x{height}");
         VideoSizeChanged?.Invoke(this, VideoSize);
     }
 
-    /// <summary>
-    /// Queues a ring for disposal a few composition passes from now.
-    /// <para>
-    /// Unmapping immediately is not safe even once no thread of ours is writing: WPF's own
-    /// render thread reads the section asynchronously, and may still be drawing the picture
-    /// it was handed. Holding the memory for a few frames costs a few megabytes briefly and
-    /// removes the race entirely.
-    /// </para>
-    /// </summary>
-    private void Retire(FrameBufferRing? ring)
+    private void Retire(SharedFrameBuffer? buffer)
     {
-        if (ring is null) return;
-        _retired.Add((ring, RetireDelayFrames));
+        if (buffer is null) return;
+        _retired.Add((buffer, RetireDelayFrames));
     }
 
-    /// <summary>Ages the retirement list by one composition pass, freeing anything due.</summary>
+    /// <summary>Ages the retirement list by one composition pass, releasing anything due.</summary>
     private void DrainRetired()
     {
-        if (_retired.Count == 0) return;
-
         for (var i = _retired.Count - 1; i >= 0; i--)
         {
-            var (ring, remaining) = _retired[i];
+            var (buffer, remaining) = _retired[i];
             if (remaining > 1)
             {
-                _retired[i] = (ring, remaining - 1);
+                _retired[i] = (buffer, remaining - 1);
                 continue;
             }
 
             _retired.RemoveAt(i);
-            ring.Dispose();
+            buffer.Dispose();
         }
     }
 
@@ -231,19 +239,29 @@ public sealed class VideoSurface : Image, IDisposable
 
     private void OnRendering(object? sender, EventArgs e)
     {
-        DrainRetired();
+        if (_retired.Count > 0) DrainRetired();
 
-        // No lock: _ring is only ever assigned on this thread.
-        var ring = _ring;
-        if (ring is null) return;
+        // Only this thread assigns these, so no lock is needed to read them.
+        var buffer = _buffer;
+        var slots = _slots;
+        if (buffer is null || slots is null || !slots.HasReady) return;
 
-        var taken = ring.TakeForDisplay(out var decodedAtUtc);
-        if (taken is null) return;
+        var picture = slots.BeginRead();
+        if (picture is null) return;
 
-        // Assigning the same reference again is a no-op, which is exactly right: Invalidate
-        // has already told WPF the pixels moved.
-        if (!ReferenceEquals(Source, taken)) Source = taken;
+        DateTime decodedAtUtc;
+        try
+        {
+            lock (_bufferLock) decodedAtUtc = _frameDecodedAtUtc;
+            buffer.Write(picture);
+        }
+        finally
+        {
+            slots.EndRead();
+        }
 
+        // The pixels behind the image changed without WPF knowing; this is what tells it.
+        buffer.Bitmap.Invalidate();
         Interlocked.Increment(ref _presentedFrames);
 
         var latency = (DateTime.UtcNow - decodedAtUtc).TotalMicroseconds;
@@ -257,14 +275,14 @@ public sealed class VideoSurface : Image, IDisposable
     /// <summary>Takes a snapshot of what is on screen right now, or null before the first frame.</summary>
     public BitmapSource? Snapshot()
     {
-        lock (_ringLock) return _ring?.Snapshot();
+        lock (_bufferLock) return _buffer?.Snapshot();
     }
 
     /// <summary>Forgets the accumulated statistics, so a new session starts from zero.</summary>
     public void ResetStatistics()
     {
         Interlocked.Exchange(ref _presentedFrames, 0);
-        Interlocked.Exchange(ref _skippedPresents, 0);
+        Interlocked.Exchange(ref _supersededFrames, 0);
         Interlocked.Exchange(ref _latencySumMicroseconds, 0);
         Interlocked.Exchange(ref _latencySamples, 0);
     }
@@ -274,9 +292,9 @@ public sealed class VideoSurface : Image, IDisposable
         UnhookRendering();
         ClearCore();
 
-        // Nothing will pump the retirement list once rendering is unhooked, and the window
-        // is going away, so release the mappings now.
-        foreach (var (ring, _) in _retired) ring.Dispose();
+        // Nothing pumps the retirement list once rendering is unhooked and the window is
+        // going away, so release the mappings now.
+        foreach (var (buffer, _) in _retired) buffer.Dispose();
         _retired.Clear();
     }
 }

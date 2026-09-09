@@ -87,6 +87,7 @@ public partial class MainWindow : Window
         _settings = AppSettings.Load();
         // Protocol tracing is only useful if the sink lets trace entries through.
         Log.MinimumLevel = _settings.TraceProtocol ? LogLevel.Trace : LogLevel.Debug;
+        LogRenderCapability();
         ApplySettingsToChrome();
         PopulateSettingsForm();
         RefreshWarnings();
@@ -96,6 +97,32 @@ public partial class MainWindow : Window
             await StartReceiverAsync();
         else
             SetIdleState("Receiver stopped", "Start it when you are ready to mirror.", MirrorSourceState.Stopped);
+    }
+
+    /// <summary>
+    /// Records how WPF will composite. Tier 0 means everything is drawn on the CPU - over a
+    /// remote desktop, or with no usable GPU driver - and no amount of work on this side
+    /// will make a 60 fps mirror smooth in that state, so it is worth knowing up front.
+    /// </summary>
+    private void LogRenderCapability()
+    {
+        var tier = RenderCapability.Tier >> 16;
+        var description = tier switch
+        {
+            0 => "software rendering - the picture will not be smooth",
+            1 => "partial hardware acceleration",
+            _ => "full hardware acceleration",
+        };
+        _log.Info($"render tier {tier}: {description}");
+
+        if (tier == 0)
+        {
+            _warnings.Add(new WarningItem(
+                "Windows is compositing this window in software",
+                "Usually a remote desktop session or a missing graphics driver. Mirroring will " +
+                "work but the picture will stutter.",
+                AboutReceiver: false));
+        }
     }
 
     private void ApplySettingsToChrome()
@@ -340,7 +367,9 @@ public partial class MainWindow : Window
     /// <summary>Surfaces the setup steps that silently break mirroring if they are missing.</summary>
     private void RefreshWarnings()
     {
-        _warnings.Clear();
+        // Keep anything that is not about the receiver, such as the render-tier notice.
+        for (var i = _warnings.Count - 1; i >= 0; i--)
+            if (_warnings[i].AboutReceiver) _warnings.RemoveAt(i);
 
         if (!NativeFairPlay.IsAvailable)
         {
@@ -789,6 +818,12 @@ public partial class MainWindow : Window
         Close();
     }
 
-    /// <summary>A blocking setup problem, shown on the idle screen.</summary>
-    private sealed record WarningItem(string Title, string Detail);
+    /// <summary>
+    /// A blocking setup problem, shown on the idle screen.
+    /// </summary>
+    /// <param name="AboutReceiver">
+    /// True for problems re-evaluated each time the receiver starts. False for facts about
+    /// the machine, which are established once and must survive that refresh.
+    /// </param>
+    private sealed record WarningItem(string Title, string Detail, bool AboutReceiver = true);
 }
