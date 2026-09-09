@@ -4,7 +4,7 @@
         xmlns:rendering="clr-namespace:SoulScreen.App.Rendering"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="SoulScreen"
-        Height="760" Width="440"
+        Height="760" Width="480"
         MinHeight="420" MinWidth="360"
         Background="{StaticResource Surface}"
         TextOptions.TextFormattingMode="Display">
@@ -28,19 +28,36 @@
         <Border x:Name="Toolbar" Grid.Row="0" Height="46" Background="{StaticResource SurfaceRaised}"
                 BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
             <Grid Margin="14,0,0,0">
-                <StackPanel Orientation="Horizontal" VerticalAlignment="Center">
+                <!-- Two columns rather than overlapping panels: the controls always get the
+                     room they need and the labels give way, instead of the two colliding in
+                     a narrow window. -->
+                <Grid.ColumnDefinitions>
+                    <ColumnDefinition Width="*" MinWidth="0" />
+                    <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+
+                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center"
+                            Margin="0,0,10,0" ClipToBounds="True">
                     <Ellipse x:Name="StatusDot" Width="8" Height="8" VerticalAlignment="Center"
                              Fill="{StaticResource TextTertiary}" />
                     <TextBlock x:Name="ReceiverName" Text="SoulScreen" Margin="10,0,0,0"
-                               FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center" />
-                    <TextBlock x:Name="DeviceLabel" Style="{StaticResource Caption}" Margin="10,0,0,0"
-                               VerticalAlignment="Center" />
+                               FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"
+                               TextTrimming="CharacterEllipsis" />
                 </StackPanel>
 
-                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"
+                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <!-- A drawn dot rather than a glyph: it reads as "record" instantly and
+                         cannot be affected by which icon font happens to be installed. -->
+                    <ToggleButton x:Name="RecordButton" Style="{StaticResource IconToggle}"
+                                  ToolTip="Record to MP4 (Ctrl+R)" IsEnabled="False"
+                                  Visibility="Collapsed"
+                                  Checked="OnRecordChanged" Unchecked="OnRecordChanged">
+                        <Ellipse x:Name="RecordDot" Width="11" Height="11"
+                                 Fill="{StaticResource TextSecondary}" />
+                    </ToggleButton>
                     <ToggleButton x:Name="MuteButton" Style="{StaticResource IconToggle}" Content="&#xE767;"
-                                  ToolTip="Mute the phone's audio (Ctrl+M)"
+                                  ToolTip="Mute the phone's audio (Ctrl+M)" Visibility="Collapsed"
                                   Checked="OnMuteChanged" Unchecked="OnMuteChanged" />
                     <Button x:Name="SnapshotButton" Style="{StaticResource IconButton}" Content="&#xE722;"
                             ToolTip="Save a screenshot (Ctrl+S)" Click="OnSnapshot" IsEnabled="False" />

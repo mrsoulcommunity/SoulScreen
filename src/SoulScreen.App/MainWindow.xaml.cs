@@ -103,6 +103,7 @@ public partial class MainWindow : Window
         {
             _pipeline = new VideoPipeline();
             _pipeline.FrameDecoded += OnFrameDecoded;
+            _pipeline.RecordingFinished += OnRecordingFinished;
         }
         catch (FFmpegUnavailableException ex)
         {
@@ -155,6 +156,7 @@ public partial class MainWindow : Window
         if (pipeline is not null)
         {
             pipeline.FrameDecoded -= OnFrameDecoded;
+            pipeline.RecordingFinished -= OnRecordingFinished;
             await pipeline.DisposeAsync();
         }
 
@@ -207,7 +209,6 @@ public partial class MainWindow : Window
                     break;
             }
 
-            DeviceLabel.Text = e.Device?.ToString() ?? string.Empty;
         });
     }
 
@@ -248,6 +249,9 @@ public partial class MainWindow : Window
         VideoHost.Visibility = Visibility.Visible;
         IdlePanel.Visibility = Visibility.Collapsed;
         SnapshotButton.IsEnabled = true;
+        RecordButton.IsEnabled = _pipeline is not null;
+        RecordButton.Visibility = _pipeline is not null ? Visibility.Visible : Visibility.Collapsed;
+        MuteButton.Visibility = _audio is not null ? Visibility.Visible : Visibility.Collapsed;
         StatusDot.Fill = (Brush)FindResource("Success");
     }
 
@@ -256,6 +260,10 @@ public partial class MainWindow : Window
         VideoHost.Visibility = Visibility.Collapsed;
         IdlePanel.Visibility = Visibility.Visible;
         SnapshotButton.IsEnabled = false;
+        RecordButton.IsEnabled = false;
+        RecordButton.IsChecked = false;
+        RecordButton.Visibility = Visibility.Collapsed;
+        MuteButton.Visibility = Visibility.Collapsed;
         Video.Clear();
     }
 
@@ -377,8 +385,45 @@ public partial class MainWindow : Window
                 MuteButton.IsChecked = MuteButton.IsChecked != true;
                 e.Handled = true;
                 break;
+            case Key.R when Keyboard.Modifiers == ModifierKeys.Control && RecordButton.IsEnabled:
+                RecordButton.IsChecked = RecordButton.IsChecked != true;
+                e.Handled = true;
+                break;
         }
     }
+
+    private void OnRecordChanged(object sender, RoutedEventArgs e)
+    {
+        var recording = RecordButton.IsChecked == true;
+        RecordDot.Fill = (Brush)FindResource(recording ? "Danger" : "TextSecondary");
+
+        if (_pipeline is null)
+        {
+            RecordButton.IsChecked = false;
+            return;
+        }
+
+        if (recording)
+        {
+            Directory.CreateDirectory(_settings.CaptureDirectory);
+            var path = Path.Combine(_settings.CaptureDirectory,
+                $"SoulScreen-{DateTime.Now:yyyyMMdd-HHmmss}.mp4");
+            _pipeline.StartRecording(path);
+            StatusText.Text = $"Recording to {Path.GetFileName(path)}";
+        }
+        else
+        {
+            _pipeline.StopRecording();
+        }
+    }
+
+    private void OnRecordingFinished(object? sender, string path) =>
+        Dispatcher.BeginInvoke(() =>
+        {
+            RecordButton.IsChecked = false;
+            StatusText.Text = $"Saved {Path.GetFileName(path)}";
+            _log.Info($"recording saved to {path}");
+        });
 
     private void OnMuteChanged(object sender, RoutedEventArgs e)
     {
@@ -541,6 +586,21 @@ public partial class MainWindow : Window
             parts.Add($"{_pipeline.DroppedSampleCount} dropped");
         if (_audio is { IsPlaying: true })
             parts.Add(_audio.Muted ? "muted" : $"audio {_audio.BufferedDuration.TotalMilliseconds:0} ms");
+        if (_pipeline.IsRecording)
+        {
+            if (_pipeline.RecordingPath is null)
+            {
+                // Recording begins on the next keyframe, which the phone may not send for
+                // a moment; saying so beats a counter stuck at zero.
+                parts.Add("REC waiting for a keyframe");
+            }
+            else
+            {
+                var elapsed = _pipeline.RecordingDuration;
+                var megabytes = _pipeline.RecordingSizeBytes / 1024.0 / 1024.0;
+                parts.Add($"REC {(int)elapsed.TotalMinutes:00}:{elapsed.Seconds:00}  {megabytes:0.#} MB");
+            }
+        }
 
         MetricsText.Text = string.Join("   ", parts);
     }

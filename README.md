@@ -26,8 +26,9 @@ phone's screen at 498x1080 / 59.9 fps.
 | Legacy pairing (pair-setup / pair-verify) | working |
 | FairPlay handshake (`/fp-setup`) | working, via an optional native helper |
 | Mirrored video: receive, decrypt, decode, display | working |
-| Audio (AAC-ELD receive + decrypt) | receives and decrypts; not yet played |
-| USB transport | not yet |
+| Audio (AAC-ELD decode and playback) | working |
+| Recording to MP4 | working — remuxed, not re-encoded |
+| USB transport | deferred; see [src/SoulScreen.Usb/UsbTransport.cs](src/SoulScreen.Usb/UsbTransport.cs) |
 
 ---
 
@@ -48,6 +49,27 @@ dotnet run --project src/SoulScreen.Cli -- serve --dump capture
 ```
 
 Then on the iPhone: **Control Center → Screen Mirroring → SoulScreen**.
+
+For a build you can keep and run without the source tree:
+
+```powershell
+pwsh tools/publish.ps1                 # framework-dependent, ~110 MB
+pwsh tools/publish.ps1 -SelfContained  # bundles the .NET runtime too
+```
+
+### In the app
+
+| | |
+| --- | --- |
+| `F11` | Fullscreen (`Esc` leaves) |
+| `Ctrl+S` | Screenshot to Pictures\SoulScreen |
+| `Ctrl+R` | Record the session to MP4 |
+| `Ctrl+M` | Mute the phone's audio |
+
+Recording remuxes the phone's own H.264 rather than re-encoding it, so it costs
+almost nothing and loses no quality. It starts on the next keyframe, which is why
+the counter can sit at "waiting for a keyframe" for a moment. Video only for now —
+the audio track is not muxed.
 
 With `--dump capture` the decrypted H.264 is written to `capture\mirror-*.h264`, which
 plays in VLC or `ffplay` — the quickest way to confirm the protocol side end to end while

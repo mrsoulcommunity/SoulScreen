@@ -40,6 +40,8 @@ public sealed class VideoPipeline : IAsyncDisposable
 
     private IMirrorSource? _source;
     private H264Decoder? _decoder;
+    private SessionRecorder? _recorder;
+    private string? _pendingRecordingPath;
 
     /// <summary>SPS and PPS in Annex-B, prepended to each keyframe so the decoder can start
     /// from any of them.</summary>
@@ -75,6 +77,53 @@ public sealed class VideoPipeline : IAsyncDisposable
 
     /// <summary>Rolling decode rate, updated about once a second.</summary>
     public double FramesPerSecond => _framesPerSecond;
+
+    /// <summary>True while a recording is open, or waiting for the keyframe that starts one.</summary>
+    public bool IsRecording => _recorder is not null || _pendingRecordingPath is not null;
+
+    /// <summary>File being recorded, once recording has actually started.</summary>
+    public string? RecordingPath => _recorder?.Path;
+
+    public long RecordedFrameCount => _recorder?.FrameCount ?? 0;
+
+    public TimeSpan RecordingDuration => _recorder?.Duration ?? TimeSpan.Zero;
+
+    public long RecordingSizeBytes => _recorder?.FileSizeBytes ?? 0;
+
+    /// <summary>Raised when a recording finishes, with the file it produced.</summary>
+    public event EventHandler<string>? RecordingFinished;
+
+    /// <summary>
+    /// Begins recording to <paramref name="path"/>. The file is opened lazily on the first
+    /// keyframe: the codec configuration has to be known before an MP4 header can be
+    /// written, and starting mid-GOP would produce a file that opens on corruption.
+    /// </summary>
+    public void StartRecording(string path)
+    {
+        lock (_queueLock)
+        {
+            if (IsRecording) return;
+            _pendingRecordingPath = path;
+            // Recording from the next keyframe rather than the next frame.
+            _log.Info($"recording will start on the next keyframe: {path}");
+        }
+    }
+
+    public void StopRecording()
+    {
+        SessionRecorder? recorder;
+        lock (_queueLock)
+        {
+            recorder = _recorder;
+            _recorder = null;
+            _pendingRecordingPath = null;
+        }
+
+        if (recorder is null) return;
+        var path = recorder.Path;
+        recorder.Dispose();
+        RecordingFinished?.Invoke(this, path);
+    }
 
     /// <summary>Raised when the picture geometry is known or changes.</summary>
     public event EventHandler<VideoFormat>? FormatChanged;
@@ -253,13 +302,16 @@ public sealed class VideoPipeline : IAsyncDisposable
             if (queued.IsKeyFrame && parameterSets.Length > 0)
             {
                 // Prefix the keyframe with SPS and PPS so a decoder that has just started,
-                // or just been resynchronised, has everything it needs in one packet.
+                // or just been resynchronised, has everything it needs in one packet. The
+                // recorder wants the same self-contained access unit.
                 var combined = ArrayPool<byte>.Shared.Rent(parameterSets.Length + queued.Length);
                 try
                 {
                     parameterSets.CopyTo(combined, 0);
                     queued.Span.CopyTo(combined.AsSpan(parameterSets.Length));
-                    frames = decoder.Decode(combined.AsSpan(0, parameterSets.Length + queued.Length), queued.TimestampUs);
+                    var access = combined.AsSpan(0, parameterSets.Length + queued.Length);
+                    Record(access, queued.TimestampUs, isKeyFrame: true);
+                    frames = decoder.Decode(access, queued.TimestampUs);
                 }
                 finally
                 {
@@ -268,6 +320,7 @@ public sealed class VideoPipeline : IAsyncDisposable
             }
             else
             {
+                Record(queued.Span, queued.TimestampUs, isKeyFrame: false);
                 frames = decoder.Decode(queued.Span, queued.TimestampUs);
             }
         }
@@ -297,6 +350,44 @@ public sealed class VideoPipeline : IAsyncDisposable
         UpdateFrameRate();
     }
 
+    /// <summary>
+    /// Hands one access unit to the recorder, opening the file when the first keyframe
+    /// arrives. Recording failures never stop the live view.
+    /// </summary>
+    private void Record(ReadOnlySpan<byte> annexB, long timestampUs, bool isKeyFrame)
+    {
+        if (_recorder is null)
+        {
+            if (_pendingRecordingPath is null || !isKeyFrame) return;
+
+            var path = _pendingRecordingPath;
+            var format = Format;
+            if (format is null) return;
+
+            try
+            {
+                _recorder = SessionRecorder.Create(path, format.Value);
+                _pendingRecordingPath = null;
+            }
+            catch (Exception ex)
+            {
+                _pendingRecordingPath = null;
+                _log.Error($"could not start recording to {path}", ex);
+                return;
+            }
+        }
+
+        try
+        {
+            _recorder.Write(annexB, timestampUs, isKeyFrame);
+        }
+        catch (Exception ex)
+        {
+            _log.Error("recording failed", ex);
+            StopRecording();
+        }
+    }
+
     private void UpdateFrameRate()
     {
         var elapsed = _rateClock.Elapsed;
@@ -311,6 +402,7 @@ public sealed class VideoPipeline : IAsyncDisposable
     public async ValueTask DisposeAsync()
     {
         Detach();
+        StopRecording();
 
         lock (_queueLock)
         {

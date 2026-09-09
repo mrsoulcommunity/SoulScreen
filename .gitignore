@@ -10,3 +10,5 @@ capture/
 *.h264
 *.aac
 *.wav
+
+dist/

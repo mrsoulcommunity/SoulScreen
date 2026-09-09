@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 using SoulScreen.AirPlay.Discovery;
-using SoulScreen.AirPlay.Streams;
+using SoulScreen.Core.Media;
 using SoulScreen.Core.Buffers;
 using Xunit;
 

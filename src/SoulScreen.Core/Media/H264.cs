@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace SoulScreen.AirPlay.Streams;
+namespace SoulScreen.Core.Media;
 
 /// <summary>H.264 helpers shared by the AirPlay and USB transports: both deliver
 /// length-prefixed NAL units plus an avcC configuration record.</summary>
@@ -42,6 +42,8 @@ public static class H264
         return offset == buffer.Length;
     }
 
+    public const int NalTypeAccessUnitDelimiter = 9;
+
     /// <summary>Wraps one NAL unit payload in a start code.</summary>
     public static byte[] ToAnnexB(params ReadOnlyMemory<byte>[] nalUnits)
     {
@@ -55,6 +57,72 @@ public static class H264
             offset += 4 + nal.Length;
         }
         return output;
+    }
+
+    /// <summary>
+    /// Splits an Annex-B buffer into its NAL units, accepting both three- and four-byte
+    /// start codes.
+    /// </summary>
+    /// <returns>Ranges into <paramref name="annexB"/>, one per NAL unit payload.</returns>
+    public static List<Range> SplitAnnexB(ReadOnlySpan<byte> annexB)
+    {
+        var units = new List<Range>();
+        var start = -1;
+
+        for (var i = 0; i + 2 < annexB.Length; i++)
+        {
+            if (annexB[i] != 0 || annexB[i + 1] != 0) continue;
+
+            int payloadStart;
+            if (annexB[i + 2] == 1) payloadStart = i + 3;
+            else if (i + 3 < annexB.Length && annexB[i + 2] == 0 && annexB[i + 3] == 1) payloadStart = i + 4;
+            else continue;
+
+            if (start >= 0) units.Add(new Range(start, i));
+            start = payloadStart;
+            i = payloadStart - 1;
+        }
+
+        if (start >= 0 && start < annexB.Length) units.Add(new Range(start, annexB.Length));
+        return units;
+    }
+
+    /// <summary>
+    /// Rewrites Annex-B into the four-byte-length-prefixed form MP4 stores, which is the
+    /// inverse of what the AirPlay transport does on the way in.
+    /// </summary>
+    /// <param name="annexB">Source access unit.</param>
+    /// <param name="destination">Buffer to write into; never needs more room than the source.</param>
+    /// <param name="dropParameterSets">
+    /// Skip SPS, PPS and access unit delimiters. MP4 carries the parameter sets in the
+    /// track's avcC record instead, and repeating them in every sample is redundant.
+    /// </param>
+    /// <returns>Bytes written, or -1 when the destination is too small.</returns>
+    public static int ConvertAnnexBToLengthPrefixed(
+        ReadOnlySpan<byte> annexB,
+        Span<byte> destination,
+        bool dropParameterSets = true)
+    {
+        var written = 0;
+
+        foreach (var range in SplitAnnexB(annexB))
+        {
+            var (offset, length) = range.GetOffsetAndLength(annexB.Length);
+            if (length == 0) continue;
+
+            var nalType = annexB[offset] & 0x1f;
+            if (dropParameterSets && nalType is NalTypeSps or NalTypePps or NalTypeAccessUnitDelimiter)
+                continue;
+
+            if (written + 4 + length > destination.Length) return -1;
+
+            System.Buffers.Binary.BinaryPrimitives.WriteUInt32BigEndian(
+                destination.Slice(written, 4), (uint)length);
+            annexB.Slice(offset, length).CopyTo(destination[(written + 4)..]);
+            written += 4 + length;
+        }
+
+        return written;
     }
 }
 
@@ -77,6 +145,71 @@ public sealed class AvcDecoderConfiguration
     /// <summary>SPS and PPS concatenated in Annex-B form, ready to prefix a keyframe.</summary>
     public byte[] ToAnnexB() => H264.ToAnnexB(
         [.. SequenceParameterSets.Concat(PictureParameterSets).Select(s => (ReadOnlyMemory<byte>)s)]);
+
+    /// <summary>
+    /// Re-encodes this configuration as an avcC record, the form an MP4 track stores it in.
+    /// </summary>
+    public byte[] ToAvcC()
+    {
+        var record = new List<byte>(64)
+        {
+            1,                                  // configurationVersion
+            ProfileIndication,
+            ProfileCompatibility,
+            LevelIndication,
+            (byte)(0xFC | (NalLengthSize - 1)), // 6 reserved bits set, then lengthSizeMinusOne
+            (byte)(0xE0 | SequenceParameterSets.Count),
+        };
+
+        foreach (var sps in SequenceParameterSets) AppendParameterSet(record, sps);
+        record.Add((byte)PictureParameterSets.Count);
+        foreach (var pps in PictureParameterSets) AppendParameterSet(record, pps);
+
+        return [.. record];
+
+        static void AppendParameterSet(List<byte> into, byte[] parameterSet)
+        {
+            into.Add((byte)(parameterSet.Length >> 8));
+            into.Add((byte)parameterSet.Length);
+            into.AddRange(parameterSet);
+        }
+    }
+
+    /// <summary>
+    /// Rebuilds a configuration from parameter sets already in Annex-B form, which is how
+    /// they travel once the transport has converted them.
+    /// </summary>
+    public static AvcDecoderConfiguration? FromAnnexB(ReadOnlySpan<byte> parameterSets)
+    {
+        var spsList = new List<byte[]>();
+        var ppsList = new List<byte[]>();
+
+        foreach (var range in H264.SplitAnnexB(parameterSets))
+        {
+            var (offset, length) = range.GetOffsetAndLength(parameterSets.Length);
+            if (length == 0) continue;
+
+            var nal = parameterSets.Slice(offset, length).ToArray();
+            switch (nal[0] & 0x1f)
+            {
+                case H264.NalTypeSps: spsList.Add(nal); break;
+                case H264.NalTypePps: ppsList.Add(nal); break;
+            }
+        }
+
+        // A configuration without an SPS describes nothing; the profile bytes come from it.
+        if (spsList.Count == 0 || spsList[0].Length < 4) return null;
+
+        return new AvcDecoderConfiguration
+        {
+            ProfileIndication = spsList[0][1],
+            ProfileCompatibility = spsList[0][2],
+            LevelIndication = spsList[0][3],
+            NalLengthSize = 4,
+            SequenceParameterSets = spsList,
+            PictureParameterSets = ppsList,
+        };
+    }
 
     public static AvcDecoderConfiguration Parse(ReadOnlySpan<byte> record)
     {
