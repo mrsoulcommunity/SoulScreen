@@ -33,6 +33,24 @@ public partial class MainWindow
             RestoreFromTray();
             SettingsButton.IsChecked = true;
         });
+        _tray.ScreenshotRequested += () => Dispatcher.BeginInvoke(() =>
+        {
+            if (SaveSnapshot()) NotifyFromTray("Screenshot saved", "It is in Captures.");
+        });
+        _tray.RecordRequested += () => Dispatcher.BeginInvoke(() =>
+        {
+            if (RecordButton.IsEnabled) RecordButton.IsChecked = RecordButton.IsChecked != true;
+        });
+        _tray.MiniPlayerRequested += () => Dispatcher.BeginInvoke(() =>
+        {
+            RestoreFromTray();
+            ToggleMiniPlayer();
+        });
+        _tray.CapturesRequested += () => Dispatcher.BeginInvoke(() =>
+        {
+            RestoreFromTray();
+            ShowCaptures();
+        });
         _tray.QuitRequested += () => Dispatcher.BeginInvoke(() =>
         {
             _quitRequested = true;
@@ -43,6 +61,7 @@ public partial class MainWindow
     /// <summary>Keeps the icon's presence, hover text and menu in step with the app.</summary>
     private void UpdateTray()
     {
+        UpdateTaskbar();
         if (_tray is null) return;
 
         _tray.Visible = _settings.MinimizeToTray || _settings.CloseToTray || _hiddenToTray;
@@ -56,7 +75,7 @@ public partial class MainWindow
             MirrorSourceState.Faulted => "receiver faulted",
             _ => "receiver stopped",
         };
-        _tray.Update(status, source is not null, source?.State == MirrorSourceState.Streaming);
+        _tray.Update(status, source is not null, VideoHost.Visibility == Visibility.Visible, RecordButton.IsChecked == true);
     }
 
     /// <summary>Takes the window off the screen and the taskbar; the receiver keeps running.</summary>
@@ -65,6 +84,8 @@ public partial class MainWindow
         if (_tray is null || _shuttingDown) return;
         if (!_hiddenToTray)
         {
+            // The window comes back from the tray as a window, not as a floating player.
+            if (_isMiniPlayer) ExitMiniPlayer();
             _stateBeforeHide = WindowState == WindowState.Minimized ? WindowState.Normal : WindowState;
             if (_isFullscreen) ExitFullscreen();
         }

@@ -45,6 +45,7 @@ public sealed class VideoSurface : Image, IDisposable
     private Int32Rect _dirtyRect;
 
     private bool _renderingHooked;
+    private volatile bool _frozen;
     private long _presentedFrames;
     private long _latencySumMicroseconds;
     private long _latencySamples;
@@ -96,6 +97,17 @@ public sealed class VideoSurface : Image, IDisposable
     /// </summary>
     public double CompositionPerSecond => _compositionPerSecond;
 
+    /// <summary>
+    /// Holds the picture on screen while the stream carries on underneath: frames keep being
+    /// taken from the cushion on their schedule and are simply not drawn, so un-pausing lands
+    /// on the live picture rather than on a backlog, and the cushion never overfills.
+    /// </summary>
+    public bool IsFrozen
+    {
+        get => _frozen;
+        set => _frozen = value;
+    }
+
     /// <summary>Pictures waiting in the pacing cushion.</summary>
     public int BufferedFrameCount => _pacer.Depth;
 
@@ -146,6 +158,7 @@ public sealed class VideoSurface : Image, IDisposable
     private void ClearCore()
     {
         _pacer.Reset();
+        _frozen = false;
         Source = null;
         _bitmap = null;
         VideoSize = default;
@@ -206,6 +219,8 @@ public sealed class VideoSurface : Image, IDisposable
 
         using (frame)
         {
+            if (_frozen) return;
+
             var bitmap = _bitmap;
             if (bitmap is null || bitmap.PixelWidth != frame.Width || bitmap.PixelHeight != frame.Height)
                 bitmap = Allocate(frame.Width, frame.Height);

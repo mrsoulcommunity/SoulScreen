@@ -78,6 +78,8 @@ $profiles = if ($IncludePublic) { 'Private,Public' } else { 'Private' }
 $programs = @(
     Join-Path $repoRoot 'src/SoulScreen.App/bin/Debug/net8.0-windows/SoulScreen.App.exe'
     Join-Path $repoRoot 'src/SoulScreen.App/bin/Release/net8.0-windows/SoulScreen.App.exe'
+    # Where RUN.bat starts the app from.
+    Join-Path $repoRoot 'artifacts/run/app/SoulScreen.App.exe'
     Join-Path $repoRoot 'src/SoulScreen.Cli/bin/Debug/net8.0/SoulScreen.Cli.exe'
     Join-Path $repoRoot 'src/SoulScreen.Cli/bin/Release/net8.0/SoulScreen.Cli.exe'
 ) | Where-Object { Test-Path $_ }
@@ -106,7 +108,7 @@ if ($programs.Count -eq 0) {
 } else {
     foreach ($program in $programs) {
         $name = Split-Path -Leaf $program
-        $config = if ($program -match '\\Release\\') { 'Release' } else { 'Debug' }
+        $config = if ($program -match '\\artifacts\\run\\') { 'RUN.bat' } elseif ($program -match '\\Release\\') { 'Release' } else { 'Debug' }
         New-NetFirewallRule -DisplayName "SoulScreen $name ($config, TCP)" -Group $groupName `
             -Direction Inbound -Action Allow -Protocol TCP -Program $program -Profile $profiles | Out-Null
         New-NetFirewallRule -DisplayName "SoulScreen $name ($config, UDP)" -Group $groupName `

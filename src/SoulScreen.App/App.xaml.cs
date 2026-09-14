@@ -53,7 +53,7 @@ public partial class App : Application
         Log.MinimumLevel = Settings.TraceProtocol ? LogLevel.Trace : LogLevel.Debug;
 
         // Before the window is built, so its first frame is already in the right colours.
-        ThemeManager.Apply(Settings.Theme, animate: false);
+        ThemeManager.Apply(Settings.Theme, Settings.Accent, animate: false);
 
         Log_.Info($"SoulScreen starting; log file at {_logFile?.Path ?? "(none)"}");
         base.OnStartup(e);

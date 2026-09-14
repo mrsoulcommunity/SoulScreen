@@ -39,14 +39,47 @@
     <SolidColorBrush x:Key="OverlayChrome" Color="#E61C1C1F" />
     <SolidColorBrush x:Key="PanelBackground" Color="#F5121214" />
     <SolidColorBrush x:Key="Shadow" Color="#99000000" />
+    <SolidColorBrush x:Key="Scrim" Color="#8C000000" />
+    <SolidColorBrush x:Key="SidebarBackground" Color="#FF161618" />
 
     <!-- Drawn over the picture, so never themed: the picture is what it is. -->
     <SolidColorBrush x:Key="VideoBackground" Color="#FF000000" />
     <SolidColorBrush x:Key="HudBackground" Color="#C20D0D0F" />
+    <SolidColorBrush x:Key="HudBackgroundHover" Color="#E62A2A2F" />
     <SolidColorBrush x:Key="HudBorder" Color="#33FFFFFF" />
     <SolidColorBrush x:Key="HudText" Color="#FFF2F2F4" />
     <SolidColorBrush x:Key="HudTextDim" Color="#FF9C9CA3" />
+    <SolidColorBrush x:Key="HudRecord" Color="#FFFF453A" />
     <SolidColorBrush x:Key="Flash" Color="#FFFFFFFF" />
+    <SolidColorBrush x:Key="MiniControlBackground" Color="#8C000000" />
+    <SolidColorBrush x:Key="MiniControlHover" Color="#CC1C1C1F" />
+    <SolidColorBrush x:Key="OnVideo" Color="#FFFFFFFF" />
+    <!-- Keycaps in the command palette, readable on the raised card and on the accent fill of
+         the selected row alike. -->
+    <SolidColorBrush x:Key="NeutralCap" Color="#26808080" />
+    <LinearGradientBrush x:Key="MiniScrimTop" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#8C000000" Offset="0" />
+        <GradientStop Color="#00000000" Offset="1" />
+    </LinearGradientBrush>
+    <LinearGradientBrush x:Key="MiniScrimBottom" StartPoint="0,0" EndPoint="0,1">
+        <GradientStop Color="#00000000" Offset="0" />
+        <GradientStop Color="#99000000" Offset="1" />
+    </LinearGradientBrush>
+    <!-- The settings sidebar's section icons. Fixed, as System Settings' are: each section
+         keeps its colour whatever the theme or accent. -->
+    <SolidColorBrush x:Key="NavBlue" Color="#FF0A84FF" />
+    <SolidColorBrush x:Key="NavPurple" Color="#FFAF52DE" />
+    <SolidColorBrush x:Key="NavGreen" Color="#FF30B94D" />
+    <SolidColorBrush x:Key="NavPink" Color="#FFFF2D55" />
+    <SolidColorBrush x:Key="NavOrange" Color="#FFFF9500" />
+    <SolidColorBrush x:Key="NavIndigo" Color="#FF5E5CE6" />
+    <SolidColorBrush x:Key="NavGraphite" Color="#FF8E8E93" />
+    <SolidColorBrush x:Key="NavTeal" Color="#FF30B0C7" />
+    <SolidColorBrush x:Key="NavGray" Color="#FF636366" />
+    <LinearGradientBrush x:Key="RecordingTile" StartPoint="0,0" EndPoint="1,1">
+        <GradientStop Color="#FF2C2C33" Offset="0" />
+        <GradientStop Color="#FF141417" Offset="1" />
+    </LinearGradientBrush>
 
     <!-- Segoe Fluent Icons ships with Windows 11; MDL2 is the Windows 10 fallback. -->
     <FontFamily x:Key="IconFont">Segoe Fluent Icons, Segoe MDL2 Assets</FontFamily>
@@ -1030,6 +1063,683 @@
         <Setter Property="Padding" Value="7,2" />
         <Setter Property="Margin" Value="0,0,4,0" />
         <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <!-- ============================== search ============================== -->
+
+    <!-- A search field: magnifier on the left, the hint (from Tag) while it is empty. -->
+    <Style x:Key="SearchBox" TargetType="TextBox" BasedOn="{StaticResource {x:Type TextBox}}">
+        <Setter Property="Padding" Value="28,5,8,5" />
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TextBox">
+                    <Border x:Name="Root" Background="{TemplateBinding Background}" CornerRadius="8"
+                            BorderBrush="{TemplateBinding BorderBrush}" BorderThickness="{TemplateBinding BorderThickness}">
+                        <Grid>
+                            <TextBlock Text="&#xE721;" FontFamily="{StaticResource IconFont}" FontSize="11.5"
+                                       Foreground="{DynamicResource TextTertiary}" VerticalAlignment="Center"
+                                       Margin="10,0,0,0" IsHitTestVisible="False" />
+                            <TextBlock x:Name="Hint" Text="{Binding Tag, RelativeSource={RelativeSource TemplatedParent}}"
+                                       Foreground="{DynamicResource TextTertiary}" FontSize="{TemplateBinding FontSize}"
+                                       VerticalAlignment="Center" Margin="30,0,8,0" IsHitTestVisible="False"
+                                       TextTrimming="CharacterEllipsis" Visibility="Collapsed" />
+                            <!-- No margin from Padding here: the text box applies its Padding
+                                 inside the content host itself, and binding it again doubled
+                                 the indent so typed text no longer lined up with the hint. -->
+                            <ScrollViewer x:Name="PART_ContentHost" VerticalAlignment="Center" />
+                        </Grid>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="Text" Value="">
+                            <Setter TargetName="Hint" Property="Visibility" Value="Visible" />
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="BorderBrush" Value="{DynamicResource TextTertiary}" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Root" Property="BorderBrush" Value="{DynamicResource Accent}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- The command palette's input: no box of its own, since the whole card is the field. -->
+    <Style x:Key="PaletteInput" TargetType="TextBox">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+        <Setter Property="CaretBrush" Value="{DynamicResource Accent}" />
+        <Setter Property="SelectionBrush" Value="{DynamicResource Accent}" />
+        <Setter Property="FontFamily" Value="{StaticResource TextFont}" />
+        <Setter Property="FontSize" Value="16" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="VerticalContentAlignment" Value="Center" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="TextBox">
+                    <ScrollViewer x:Name="PART_ContentHost" Background="Transparent" VerticalAlignment="Center" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ============================== lists ============================== -->
+
+    <!-- A bare list: no frame, no system selection colours; the item style does the drawing. -->
+    <Style x:Key="PlainList" TargetType="ListBox">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="BorderThickness" Value="0" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="ScrollViewer.HorizontalScrollBarVisibility" Value="Disabled" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListBox">
+                    <ScrollViewer x:Name="Scroller" Focusable="False" Padding="{TemplateBinding Padding}"
+                                  VerticalScrollBarVisibility="Auto" HorizontalScrollBarVisibility="Disabled">
+                        <ItemsPresenter />
+                    </ScrollViewer>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- A row that fills with the accent when chosen, as a macOS sidebar or Spotlight does.
+         Colours inside the row inherit Foreground, so they turn with it. -->
+    <Style x:Key="AccentRow" TargetType="ListBoxItem">
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+        <Setter Property="FontFamily" Value="{StaticResource TextFont}" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="Padding" Value="8,4" />
+        <Setter Property="Margin" Value="0,1" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ListBoxItem">
+                    <Border x:Name="Root" Background="Transparent" CornerRadius="7" Padding="{TemplateBinding Padding}"
+                            BorderBrush="Transparent" BorderThickness="1">
+                        <ContentPresenter HorizontalAlignment="{TemplateBinding HorizontalContentAlignment}" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{DynamicResource SurfaceHover}" />
+                        </Trigger>
+                        <Trigger Property="IsSelected" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{DynamicResource Accent}" />
+                            <Setter Property="Foreground" Value="{DynamicResource OnAccent}" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Root" Property="BorderBrush" Value="{DynamicResource TextPrimary}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- A command palette row. Never takes focus: typing stays in the search field while the
+         arrow keys move the selection. -->
+    <Style x:Key="PaletteRow" TargetType="ListBoxItem" BasedOn="{StaticResource AccentRow}">
+        <Setter Property="Focusable" Value="False" />
+        <Setter Property="Padding" Value="10,0" />
+        <Setter Property="Margin" Value="0" />
+        <Setter Property="Height" Value="38" />
+    </Style>
+
+    <!-- ============================== appearance ============================== -->
+
+    <!-- A colour swatch for the accent picker. The fill comes from Background, set in code. -->
+    <Style x:Key="AccentSwatch" TargetType="RadioButton">
+        <Setter Property="Width" Value="28" />
+        <Setter Property="Height" Value="28" />
+        <Setter Property="Margin" Value="0,2,6,2" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Grid Background="Transparent">
+                        <Ellipse x:Name="Ring" Stroke="{DynamicResource TextSecondary}" StrokeThickness="2" Opacity="0" />
+                        <Ellipse Width="20" Height="20" Fill="{TemplateBinding Background}" />
+                        <Ellipse x:Name="Dot" Width="7" Height="7" Fill="White" Opacity="0" />
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Ring" Property="Opacity" Value="0.45" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Ring" Property="Opacity" Value="1" />
+                            <Setter TargetName="Dot" Property="Opacity" Value="1" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Ring" Property="Stroke" Value="{DynamicResource Accent}" />
+                            <Setter TargetName="Ring" Property="Opacity" Value="1" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ============================== captures ============================== -->
+
+    <!-- One capture in the gallery: the whole tile is the button. -->
+    <Style x:Key="CaptureTile" TargetType="Button">
+        <Setter Property="Background" Value="Transparent" />
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Root" Background="{TemplateBinding Background}" CornerRadius="12" Padding="6"
+                            BorderBrush="Transparent" BorderThickness="1.5">
+                        <ContentPresenter />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{DynamicResource SurfaceHover}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{DynamicResource SurfacePressed}" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Root" Property="BorderBrush" Value="{DynamicResource Accent}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ============================== over the picture ============================== -->
+
+    <!-- A clickable badge over the picture: the recording counter, "Paused". -->
+    <Style x:Key="HudPill" TargetType="Button">
+        <Setter Property="Foreground" Value="{StaticResource HudText}" />
+        <Setter Property="FontFamily" Value="{StaticResource TextFont}" />
+        <Setter Property="FontSize" Value="12" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Root" Background="{StaticResource HudBackground}" BorderBrush="{StaticResource HudBorder}"
+                            BorderThickness="1" CornerRadius="14" Padding="11,5">
+                        <ContentPresenter VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{StaticResource HudBackgroundHover}" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Root" Property="BorderBrush" Value="{DynamicResource Accent}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- The mini player's round controls, which sit on the picture itself. -->
+    <Style x:Key="MiniButton" TargetType="Button">
+        <Setter Property="Width" Value="34" />
+        <Setter Property="Height" Value="34" />
+        <Setter Property="Margin" Value="3,0" />
+        <Setter Property="Foreground" Value="{StaticResource OnVideo}" />
+        <Setter Property="FontFamily" Value="{StaticResource IconFont}" />
+        <Setter Property="FontSize" Value="13.5" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Root" Background="{StaticResource MiniControlBackground}" CornerRadius="17"
+                            BorderBrush="{StaticResource HudBorder}" BorderThickness="1">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{StaticResource MiniControlHover}" />
+                        </Trigger>
+                        <Trigger Property="IsKeyboardFocused" Value="True">
+                            <Setter TargetName="Root" Property="BorderBrush" Value="{DynamicResource Accent}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- The coloured square beside each section in the settings sidebar. -->
+    <Style x:Key="NavIcon" TargetType="Border">
+        <Setter Property="Width" Value="22" />
+        <Setter Property="Height" Value="22" />
+        <Setter Property="CornerRadius" Value="6" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+    </Style>
+
+    <!-- ============================== markup and viewer ============================== -->
+
+    <SolidColorBrush x:Key="NavRed" Color="#FFFF3B30" />
+    <!-- Behind a capture opened in the viewer: dark whatever the theme, as a photo viewer is. -->
+    <SolidColorBrush x:Key="ViewerBackground" Color="#F50B0B0C" />
+    <SolidColorBrush x:Key="HudHover" Color="#2EFFFFFF" />
+    <SolidColorBrush x:Key="HudPressed" Color="#47FFFFFF" />
+    <SolidColorBrush x:Key="HudSelected" Color="#3DFFFFFF" />
+
+    <!-- Keyboard focus on the dark bars. A focus visual rather than a focused-state trigger: WPF
+         draws it only when focus arrived from the keyboard, so a button that has just been clicked
+         does not keep a ring round it. -->
+    <Style x:Key="HudFocusVisual">
+        <Setter Property="Control.Template">
+            <Setter.Value>
+                <ControlTemplate>
+                    <Border CornerRadius="8" BorderBrush="{DynamicResource Accent}" BorderThickness="1.5" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="HudRoundFocusVisual">
+        <Setter Property="Control.Template">
+            <Setter.Value>
+                <ControlTemplate>
+                    <Border CornerRadius="20" BorderBrush="{DynamicResource Accent}" BorderThickness="1.5" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- An icon button on a dark surface over the picture: the markup bar, the viewer. -->
+    <Style x:Key="HudButton" TargetType="Button">
+        <Setter Property="Width" Value="30" />
+        <Setter Property="Height" Value="30" />
+        <Setter Property="Foreground" Value="{StaticResource HudText}" />
+        <Setter Property="FontFamily" Value="{StaticResource IconFont}" />
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource HudFocusVisual}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Root" Background="Transparent" CornerRadius="8" BorderBrush="Transparent" BorderThickness="1">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{StaticResource HudHover}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{StaticResource HudPressed}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Root" Property="Opacity" Value="0.35" />
+                            <Setter Property="Cursor" Value="Arrow" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- The same, staying lit while what it opens is open. -->
+    <Style x:Key="HudToggle" TargetType="ToggleButton">
+        <Setter Property="Width" Value="30" />
+        <Setter Property="Height" Value="30" />
+        <Setter Property="Foreground" Value="{StaticResource HudText}" />
+        <Setter Property="FontFamily" Value="{StaticResource IconFont}" />
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource HudFocusVisual}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="Root" Background="Transparent" CornerRadius="8" BorderBrush="Transparent" BorderThickness="1">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{StaticResource HudHover}" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{StaticResource HudSelected}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- One tool of several, of which the chosen one is lit: pen, highlighter, laser, eraser. -->
+    <Style x:Key="HudTool" TargetType="RadioButton">
+        <Setter Property="Width" Value="30" />
+        <Setter Property="Height" Value="30" />
+        <Setter Property="Foreground" Value="{StaticResource HudText}" />
+        <Setter Property="FontFamily" Value="{StaticResource IconFont}" />
+        <Setter Property="FontSize" Value="14.5" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource HudFocusVisual}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Border x:Name="Root" Background="Transparent" CornerRadius="8" BorderBrush="Transparent" BorderThickness="1">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{StaticResource HudHover}" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{StaticResource HudSelected}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- The one word button on a dark bar: "Done". -->
+    <Style x:Key="HudDone" TargetType="Button">
+        <Setter Property="Height" Value="30" />
+        <Setter Property="Margin" Value="4,0,0,0" />
+        <Setter Property="Padding" Value="13,0" />
+        <Setter Property="Background" Value="{DynamicResource Accent}" />
+        <Setter Property="Foreground" Value="{DynamicResource OnAccent}" />
+        <Setter Property="FontFamily" Value="{StaticResource TextFont}" />
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="FontWeight" Value="SemiBold" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource HudFocusVisual}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Root" Background="{TemplateBinding Background}" CornerRadius="8" Padding="{TemplateBinding Padding}"
+                            BorderBrush="Transparent" BorderThickness="1">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{DynamicResource AccentHover}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{DynamicResource AccentPressed}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- An ink colour. The fill comes from Background, set in code. -->
+    <Style x:Key="HudSwatch" TargetType="RadioButton">
+        <Setter Property="Width" Value="30" />
+        <Setter Property="Height" Value="30" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource HudRoundFocusVisual}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Grid Background="Transparent">
+                        <Ellipse x:Name="Ring" Width="26" Height="26" Stroke="{StaticResource HudText}" StrokeThickness="2" Opacity="0" />
+                        <Ellipse Width="18" Height="18" Fill="{TemplateBinding Background}" Stroke="{StaticResource HudBorder}" StrokeThickness="1" />
+                    </Grid>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Ring" Property="Opacity" Value="0.45" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Ring" Property="Opacity" Value="1" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- A stroke width, drawn as a dot of that size. -->
+    <Style x:Key="HudSizeChoice" TargetType="RadioButton">
+        <Setter Property="Width" Value="36" />
+        <Setter Property="Height" Value="28" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource HudFocusVisual}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="RadioButton">
+                    <Border x:Name="Root" Background="Transparent" CornerRadius="8" BorderBrush="Transparent" BorderThickness="1" Margin="2,0">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{StaticResource HudHover}" />
+                        </Trigger>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{StaticResource HudSelected}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- The viewer's previous and next buttons, round and floating over the capture. -->
+    <Style x:Key="ViewerNav" TargetType="Button" BasedOn="{StaticResource MiniButton}">
+        <Setter Property="Width" Value="40" />
+        <Setter Property="Height" Value="40" />
+        <Setter Property="Margin" Value="14,0" />
+        <Setter Property="FontSize" Value="14" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource HudRoundFocusVisual}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Root" Background="{StaticResource MiniControlBackground}" CornerRadius="20"
+                            BorderBrush="{StaticResource HudBorder}" BorderThickness="1">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{StaticResource MiniControlHover}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- A recording's playback position: the volume slider's look, as wide as it is given. -->
+    <Style x:Key="ScrubSlider" TargetType="Slider" BasedOn="{StaticResource VolumeSlider}">
+        <Setter Property="Width" Value="Auto" />
+        <Setter Property="Margin" Value="0" />
+        <Setter Property="HorizontalAlignment" Value="Stretch" />
+        <Setter Property="SmallChange" Value="5" />
+        <Setter Property="LargeChange" Value="10" />
+    </Style>
+
+    <!-- ============================== control bar ============================== -->
+
+    <!-- A toggle on the control bar whose state is told by its glyph - mute - so it does not
+         also light up the way markup does. -->
+    <Style x:Key="HudPlainToggle" TargetType="ToggleButton" BasedOn="{StaticResource HudToggle}">
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="Root" Background="Transparent" CornerRadius="8" BorderBrush="Transparent" BorderThickness="1">
+                        <ContentPresenter HorizontalAlignment="Center" VerticalAlignment="Center" />
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{StaticResource HudHover}" />
+                        </Trigger>
+                        <Trigger Property="IsPressed" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{StaticResource HudPressed}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter TargetName="Root" Property="Opacity" Value="0.35" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- The volume on the control bar: white on the dark bar, as QuickTime draws it, whatever
+         the theme and accent - the bar itself is not themed. -->
+    <Style x:Key="HudVolumeSlider" TargetType="Slider">
+        <Setter Property="Width" Value="76" />
+        <Setter Property="Height" Value="30" />
+        <Setter Property="VerticalAlignment" Value="Center" />
+        <Setter Property="Margin" Value="2,0,6,0" />
+        <Setter Property="SmallChange" Value="0.05" />
+        <Setter Property="LargeChange" Value="0.1" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource HudFocusVisual}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Slider">
+                    <Track x:Name="PART_Track">
+                        <Track.DecreaseRepeatButton>
+                            <RepeatButton Command="{x:Static Slider.DecreaseLarge}" Focusable="False" IsTabStop="False">
+                                <RepeatButton.Template>
+                                    <ControlTemplate TargetType="RepeatButton">
+                                        <Grid Height="18" Background="Transparent">
+                                            <Border Height="4" CornerRadius="2" VerticalAlignment="Center" Background="{StaticResource HudText}" />
+                                        </Grid>
+                                    </ControlTemplate>
+                                </RepeatButton.Template>
+                            </RepeatButton>
+                        </Track.DecreaseRepeatButton>
+                        <Track.IncreaseRepeatButton>
+                            <RepeatButton Command="{x:Static Slider.IncreaseLarge}" Focusable="False" IsTabStop="False">
+                                <RepeatButton.Template>
+                                    <ControlTemplate TargetType="RepeatButton">
+                                        <Grid Height="18" Background="Transparent">
+                                            <Border Height="4" CornerRadius="2" VerticalAlignment="Center" Background="{StaticResource HudPressed}" />
+                                        </Grid>
+                                    </ControlTemplate>
+                                </RepeatButton.Template>
+                            </RepeatButton>
+                        </Track.IncreaseRepeatButton>
+                        <Track.Thumb>
+                            <Thumb Width="13" Height="13" Focusable="False">
+                                <Thumb.Template>
+                                    <ControlTemplate TargetType="Thumb">
+                                        <Ellipse Fill="White">
+                                            <Ellipse.Effect>
+                                                <DropShadowEffect BlurRadius="4" ShadowDepth="1" Opacity="0.5" />
+                                            </Ellipse.Effect>
+                                        </Ellipse>
+                                    </ControlTemplate>
+                                </Thumb.Template>
+                            </Thumb>
+                        </Track.Thumb>
+                    </Track>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Opacity" Value="0.4" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- ============================== menus ============================== -->
+
+    <!-- Keyboard focus on a menu row. A focus visual rather than a focused-state trigger, so a
+         menu opened with the mouse does not start with a ring round its first row. -->
+    <Style x:Key="MenuFocusVisual">
+        <Setter Property="Control.Template">
+            <Setter.Value>
+                <ControlTemplate>
+                    <Border CornerRadius="6" BorderBrush="{DynamicResource Accent}" BorderThickness="1.5" />
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- One command in a drop-down card: its name, and its shortcut in grey on the right
+         (from Tag), laid out as the context menu's rows are. -->
+    <Style x:Key="MenuRow" TargetType="Button">
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+        <Setter Property="FontFamily" Value="{StaticResource TextFont}" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource MenuFocusVisual}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="Button">
+                    <Border x:Name="Root" Background="Transparent" CornerRadius="6" Padding="8,6" BorderBrush="Transparent" BorderThickness="1">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="20" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <ContentPresenter Grid.Column="1" VerticalAlignment="Center" />
+                            <TextBlock Grid.Column="2" Text="{TemplateBinding Tag}" Foreground="{DynamicResource TextTertiary}"
+                                       FontSize="12" VerticalAlignment="Center" Margin="24,0,0,0" />
+                        </Grid>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{DynamicResource SurfaceHover}" />
+                        </Trigger>
+                        <Trigger Property="IsEnabled" Value="False">
+                            <Setter Property="Foreground" Value="{DynamicResource TextTertiary}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- The same row for an option that is on or off, with a check mark in the gutter while on. -->
+    <Style x:Key="MenuToggleRow" TargetType="ToggleButton">
+        <Setter Property="Foreground" Value="{DynamicResource TextPrimary}" />
+        <Setter Property="FontFamily" Value="{StaticResource TextFont}" />
+        <Setter Property="FontSize" Value="13" />
+        <Setter Property="HorizontalContentAlignment" Value="Stretch" />
+        <Setter Property="FocusVisualStyle" Value="{StaticResource MenuFocusVisual}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="ToggleButton">
+                    <Border x:Name="Root" Background="Transparent" CornerRadius="6" Padding="8,6" BorderBrush="Transparent" BorderThickness="1">
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="20" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <TextBlock x:Name="Check" Text="&#xE73E;" FontFamily="{StaticResource IconFont}" FontSize="11"
+                                       Foreground="{DynamicResource Accent}" VerticalAlignment="Center" Visibility="Hidden" />
+                            <ContentPresenter Grid.Column="1" VerticalAlignment="Center" />
+                            <TextBlock Grid.Column="2" Text="{TemplateBinding Tag}" Foreground="{DynamicResource TextTertiary}"
+                                       FontSize="12" VerticalAlignment="Center" Margin="24,0,0,0" />
+                        </Grid>
+                    </Border>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Check" Property="Visibility" Value="Visible" />
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Root" Property="Background" Value="{DynamicResource SurfaceHover}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <Style x:Key="MenuDivider" TargetType="Rectangle">
+        <Setter Property="Height" Value="1" />
+        <Setter Property="Margin" Value="8,4" />
+        <Setter Property="Fill" Value="{DynamicResource BorderBrush}" />
     </Style>
 
 </ResourceDictionary>

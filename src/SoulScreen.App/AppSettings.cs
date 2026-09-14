@@ -2,9 +2,19 @@ using System.IO;
 using System.Text.Json;
 using System.Text.Json.Serialization;
 using SoulScreen.AirPlay;
+using SoulScreen.App.Logic;
 using SoulScreen.Core.Logging;
 
 namespace SoulScreen.App;
+
+/// <summary>The file format screenshots are saved in.</summary>
+public enum ScreenshotFormat
+{
+    /// <summary>Lossless, and exactly what was on screen.</summary>
+    Png,
+    /// <summary>A fraction of the size, for sharing.</summary>
+    Jpeg,
+}
 
 /// <summary>How the window's colours are chosen.</summary>
 public enum AppTheme
@@ -70,8 +80,21 @@ public sealed class AppSettings
     /// <summary>Most phones remembered in the history list.</summary>
     public const int MaxRecentDevices = 8;
 
-    public static string Directory { get; } = Path.Combine(
-        Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SoulScreen");
+    /// <summary>
+    /// Where settings, the pairing identity and the log live. SOULSCREEN_HOME moves all of it
+    /// elsewhere - a second, separate copy for trying a build out beside the one in daily use,
+    /// or a portable copy on a removable drive.
+    /// </summary>
+    public static string Directory { get; } =
+        Environment.GetEnvironmentVariable(HomeVariable) is { Length: > 0 } home
+            ? Path.GetFullPath(home)
+            : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "SoulScreen");
+
+    /// <summary>The environment variable that relocates <see cref="Directory"/>.</summary>
+    public const string HomeVariable = "SOULSCREEN_HOME";
+
+    /// <summary>True when <see cref="Directory"/> was moved by <see cref="HomeVariable"/>.</summary>
+    public static bool HasCustomHome => Environment.GetEnvironmentVariable(HomeVariable) is { Length: > 0 };
 
     private static string FilePath => Path.Combine(Directory, "settings.json");
 
@@ -114,6 +137,9 @@ public sealed class AppSettings
 
     public AppTheme Theme { get; set; } = AppTheme.System;
 
+    /// <summary>The colour of selection, switches and the primary buttons.</summary>
+    public AccentColor Accent { get; set; } = AccentColor.Blue;
+
     public VideoFit VideoFit { get; set; } = VideoFit.Fit;
 
     /// <summary>Clockwise rotation applied to the picture: 0, 90, 180 or 270.</summary>
@@ -135,6 +161,31 @@ public sealed class AppSettings
 
     /// <summary>Show the statistics overlay over the picture.</summary>
     public bool ShowStats { get; set; }
+
+    /// <summary>Round the picture's corners in the window, as the phone's own screen is.</summary>
+    public bool RoundedCorners { get; set; } = true;
+
+    // --------------------------------------------------------------------- markup
+
+    public const int MarkupColorCount = 6;
+    public const int MarkupSizeCount = 3;
+
+    /// <summary>The ink last chosen for drawing over the picture.</summary>
+    public int MarkupColorIndex { get; set; }
+
+    /// <summary>The stroke width last chosen: fine, medium or bold.</summary>
+    public int MarkupSizeIndex { get; set; } = 1;
+
+    // -------------------------------------------------------------------- privacy
+
+    /// <summary>Hold a phone's picture and sound back until it is allowed to mirror.</summary>
+    public bool AskBeforeMirroring { get; set; }
+
+    /// <summary>Phones allowed to mirror without being asked about.</summary>
+    public List<DeviceKey> AllowedDevices { get; set; } = [];
+
+    /// <summary>Phones turned away whenever they try to mirror.</summary>
+    public List<DeviceKey> BlockedDevices { get; set; } = [];
 
     // ---------------------------------------------------------------------- audio
 
@@ -161,6 +212,24 @@ public sealed class AppSettings
     /// <summary>Also put each screenshot on the clipboard.</summary>
     public bool CopyScreenshotToClipboard { get; set; }
 
+    public ScreenshotFormat ScreenshotFormat { get; set; } = ScreenshotFormat.Png;
+
+    // ------------------------------------------------------------- on connecting
+
+    /// <summary>Bring the window out of the notification area or the taskbar when a phone
+    /// starts mirroring: a mirror nobody can see is not much use.</summary>
+    public bool BringToFrontOnConnect { get; set; } = true;
+
+    /// <summary>Go fullscreen when a phone starts mirroring.</summary>
+    public bool FullscreenOnConnect { get; set; }
+
+    /// <summary>Start recording when a phone starts mirroring. Not for the demo.</summary>
+    public bool RecordOnConnect { get; set; }
+
+    /// <summary>Leave fullscreen when mirroring ends, rather than filling the screen with
+    /// the idle panel.</summary>
+    public bool LeaveFullscreenOnDisconnect { get; set; } = true;
+
     // --------------------------------------------------------------------- window
 
     /// <summary>Keep the window above other applications.</summary>
@@ -178,12 +247,24 @@ public sealed class AppSettings
     /// <summary>Start SoulScreen when signing in to Windows, minimised.</summary>
     public bool LaunchAtStartup { get; set; }
 
+    /// <summary>Screenshot, record, mini player and show-window shortcuts that work while
+    /// another application has the keyboard. Off by default: they take keys from every app.</summary>
+    public bool GlobalHotkeys { get; set; }
+
+    /// <summary>Set once the welcome screen has been seen, so it is shown only the first time.</summary>
+    public bool HasSeenWelcome { get; set; }
+
     /// <summary>Last window placement, restored on the next launch.</summary>
     public double? WindowLeft { get; set; }
     public double? WindowTop { get; set; }
     public double? WindowWidth { get; set; }
     public double? WindowHeight { get; set; }
     public bool WindowMaximized { get; set; }
+
+    /// <summary>The mini player's longer side and its place, from the last time it was used.</summary>
+    public double? MiniPlayerLongSide { get; set; }
+    public double? MiniPlayerLeft { get; set; }
+    public double? MiniPlayerTop { get; set; }
 
     // -------------------------------------------------------------------- history
 
@@ -254,6 +335,15 @@ public sealed class AppSettings
         if (!Enum.IsDefined(Theme)) Theme = AppTheme.System;
         if (!Enum.IsDefined(VideoFit)) VideoFit = VideoFit.Fit;
         if (!Enum.IsDefined(Latency)) Latency = LatencyMode.Balanced;
+        if (!Enum.IsDefined(Accent)) Accent = AccentColor.Blue;
+        if (!Enum.IsDefined(ScreenshotFormat)) ScreenshotFormat = ScreenshotFormat.Png;
+
+        if (MiniPlayerLongSide is not (> 0 and < 20000)) MiniPlayerLongSide = null;
+        if (MiniPlayerLeft is not (> -20000 and < 20000) || MiniPlayerTop is not (> -20000 and < 20000))
+        {
+            MiniPlayerLeft = null;
+            MiniPlayerTop = null;
+        }
         if (string.IsNullOrWhiteSpace(CaptureDirectory))
             CaptureDirectory = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.MyPictures), "SoulScreen");
         if (string.IsNullOrWhiteSpace(AudioOutputDeviceId)) AudioOutputDeviceId = null;
@@ -268,6 +358,13 @@ public sealed class AppSettings
             WindowLeft = null;
             WindowTop = null;
         }
+
+        MarkupColorIndex = MarkupColorIndex is >= 0 and < MarkupColorCount ? MarkupColorIndex : 0;
+        MarkupSizeIndex = MarkupSizeIndex is >= 0 and < MarkupSizeCount ? MarkupSizeIndex : 1;
+        AllowedDevices = DeviceTrust.Sanitise(AllowedDevices);
+        BlockedDevices = DeviceTrust.Sanitise(BlockedDevices);
+        // A phone on both lists is blocked; being allowed as well only confuses the settings.
+        AllowedDevices.RemoveAll(key => DeviceTrust.Contains(BlockedDevices, key.Name, key.Model));
 
         RecentDevices ??= [];
         RecentDevices.RemoveAll(d => d is null || string.IsNullOrWhiteSpace(d.Name));

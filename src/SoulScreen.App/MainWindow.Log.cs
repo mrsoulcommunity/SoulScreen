@@ -22,7 +22,11 @@ public partial class MainWindow
 
     private void OnLogToggled(object sender, RoutedEventArgs e)
     {
+        if (LogButton.IsChecked == true && _isMiniPlayer) ExitMiniPlayer();
+
         LogPanel.Visibility = LogButton.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        // The control bar and toasts sit above the docked log; they move with it.
+        PositionOverlays();
         if (LogButton.IsChecked != true) return;
 
         // Reopening the panel must show what arrived while it was hidden: the refresh

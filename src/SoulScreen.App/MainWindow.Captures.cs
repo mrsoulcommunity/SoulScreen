@@ -1,0 +1,448 @@
+using System.Collections.Specialized;
+using System.ComponentModel;
+using System.Diagnostics;
+using System.Globalization;
+using System.IO;
+using System.Windows;
+using System.Windows.Controls;
+using System.Windows.Input;
+using System.Windows.Media;
+using System.Windows.Media.Imaging;
+using SoulScreen.App.Logic;
+
+namespace SoulScreen.App;
+
+/// <summary>
+/// The captures gallery: every screenshot and recording SoulScreen has saved to the capture
+/// folder, newest first, to open, copy, find in Explorer or throw away without leaving the app.
+/// <para>
+/// Only files SoulScreen named are shown - the folder may well be the user's whole Pictures
+/// folder. Thumbnails are decoded small, one at a time, off the UI thread, and let go of when
+/// the panel closes, so an open gallery cannot put the picture behind.
+/// </para>
+/// </summary>
+public partial class MainWindow
+{
+    /// <summary>The most captures listed at once, which bounds the thumbnails held in memory.</summary>
+    private const int MaxCapturesShown = 120;
+
+    /// <summary>Narrowest a tile may be before the gallery drops a column.</summary>
+    private const double MinCaptureTileWidth = 150;
+
+    /// <summary>Bumped whenever the list is rebuilt, so a slow listing or thumbnail for an old
+    /// list never lands in a new one.</summary>
+    private int _captureGeneration;
+
+    private List<CaptureItem> _allCaptures = [];
+
+    private sealed class CaptureItem : INotifyPropertyChanged
+    {
+        private Brush? _thumbnail;
+
+        public required string Path { get; init; }
+        public required CaptureKind Kind { get; init; }
+        public required DateTime ModifiedLocal { get; init; }
+        public required long Size { get; init; }
+
+        public string FileName => System.IO.Path.GetFileName(Path);
+
+        public string Title => FormatCaptureTime(ModifiedLocal);
+
+        public string Detail => Kind == CaptureKind.Recording
+            ? $"Recording · {CaptureNaming.FormatSize(Size)}"
+            : $"{System.IO.Path.GetExtension(Path).TrimStart('.').ToUpperInvariant()} · {CaptureNaming.FormatSize(Size)}";
+
+        public Visibility PlayBadge => Kind == CaptureKind.Recording ? Visibility.Visible : Visibility.Collapsed;
+
+        public string AccessibleName => $"{(Kind == CaptureKind.Recording ? "Recording" : "Screenshot")}, {Title}";
+
+        public Brush? Thumbnail
+        {
+            get => _thumbnail;
+            set
+            {
+                _thumbnail = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(Thumbnail)));
+            }
+        }
+
+        public event PropertyChangedEventHandler? PropertyChanged;
+    }
+
+    private void InitialiseCaptures()
+    {
+        CaptureList.Tag = 170.0;
+        CapturesScroller.SizeChanged += (_, _) => UpdateCaptureTileWidth();
+    }
+
+    // ------------------------------------------------------------------ opening
+
+    private void OnCapturesToggled(object sender, RoutedEventArgs e)
+    {
+        if (CapturesButton.IsChecked == true)
+        {
+            if (_isMiniPlayer) ExitMiniPlayer();
+            SettingsButton.IsChecked = false;
+            CloseHelp();
+            CapturesPanel.Visibility = Visibility.Visible;
+            FadeContentIn(CapturesPanel);
+            UpdateCaptureTileWidth();
+            RefreshCaptures();
+        }
+        else
+        {
+            CloseViewer();
+            CapturesPanel.Visibility = Visibility.Collapsed;
+            // Let the thumbnails go: they are only worth their memory while they can be seen.
+            _captureGeneration++;
+            CaptureList.ItemsSource = null;
+            _allCaptures = [];
+        }
+    }
+
+    private void ShowCaptures()
+    {
+        if (CapturesButton.IsChecked == true) RefreshCaptures();
+        else CapturesButton.IsChecked = true;
+    }
+
+    private void OnCloseCaptures(object sender, RoutedEventArgs e) => CapturesButton.IsChecked = false;
+
+    private void OnMenuCaptures(object sender, RoutedEventArgs e) => ShowCaptures();
+
+    private void OnRefreshCaptures(object sender, RoutedEventArgs e) => RefreshCaptures();
+
+    private void OnCaptureFilterChanged(object sender, RoutedEventArgs e)
+    {
+        if (CaptureList is null) return;
+        ApplyCaptureFilter();
+    }
+
+    /// <summary>Refreshes the gallery if it is open; called whenever a capture is saved.</summary>
+    private void RefreshCapturesIfOpen()
+    {
+        if (CapturesPanel.Visibility == Visibility.Visible) RefreshCaptures();
+    }
+
+    // ------------------------------------------------------------------ listing
+
+    private async void RefreshCaptures()
+    {
+        var generation = ++_captureGeneration;
+        var directory = _settings.CaptureDirectory;
+
+        List<CaptureItem> items;
+        try
+        {
+            items = await Task.Run(() => ListCaptures(directory));
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"could not list the captures in {directory}", ex);
+            items = [];
+        }
+
+        if (generation != _captureGeneration || _shuttingDown || CapturesPanel.Visibility != Visibility.Visible) return;
+
+        _allCaptures = items;
+        ApplyCaptureFilter();
+        await LoadThumbnailsAsync(items, generation);
+    }
+
+    private static List<CaptureItem> ListCaptures(string directory)
+    {
+        if (!Directory.Exists(directory)) return [];
+
+        var found = new List<CaptureItem>();
+        foreach (var path in Directory.EnumerateFiles(directory, CaptureNaming.Prefix + "*"))
+        {
+            if (CaptureNaming.KindOf(path) is not { } kind) continue;
+            try
+            {
+                var info = new FileInfo(path);
+                if (!info.Exists) continue;
+                found.Add(new CaptureItem { Path = path, Kind = kind, ModifiedLocal = info.LastWriteTime, Size = info.Length });
+            }
+            catch (IOException) { /* gone, or locked, between listing and reading */ }
+            catch (UnauthorizedAccessException) { }
+        }
+
+        return found.OrderByDescending(item => item.ModifiedLocal).ToList();
+    }
+
+    private void ApplyCaptureFilter()
+    {
+        // A recording still being written is not a capture yet: it would open as a broken file.
+        var inProgress = _pipeline?.RecordingPath;
+        var complete = _allCaptures
+            .Where(item => !string.Equals(item.Path, inProgress, StringComparison.OrdinalIgnoreCase))
+            .ToList();
+
+        var screenshots = complete.Count(item => item.Kind == CaptureKind.Screenshot);
+        var recordings = complete.Count - screenshots;
+
+        var shown = CapturesShots.IsChecked == true ? complete.Where(item => item.Kind == CaptureKind.Screenshot)
+            : CapturesVideos.IsChecked == true ? complete.Where(item => item.Kind == CaptureKind.Recording)
+            : complete;
+        var list = shown.Take(MaxCapturesShown).ToList();
+
+        var recordingTile = (Brush)FindResource("RecordingTile");
+        foreach (var item in list)
+            if (item.Kind == CaptureKind.Recording) item.Thumbnail ??= recordingTile;
+
+        CaptureList.ItemsSource = list;
+
+        CapturesSummary.Text = complete.Count == 0
+            ? _settings.CaptureDirectory
+            : $"{Plural(screenshots, "screenshot")} · {Plural(recordings, "recording")} · {_settings.CaptureDirectory}";
+        CapturesSummary.ToolTip = _settings.CaptureDirectory;
+
+        CapturesEmpty.Visibility = list.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        CapturesEmptyTitle.Text = CapturesShots.IsChecked == true ? "No screenshots yet"
+            : CapturesVideos.IsChecked == true ? "No recordings yet"
+            : "No captures yet";
+    }
+
+    private static string Plural(int count, string noun) => $"{count} {noun}{(count == 1 ? "" : "s")}";
+
+    /// <summary>Decodes the screenshots' thumbnails one after another, newest first, stopping
+    /// as soon as the list they belong to is replaced or the panel closes.</summary>
+    private async Task LoadThumbnailsAsync(IReadOnlyList<CaptureItem> items, int generation)
+    {
+        foreach (var item in items.Take(MaxCapturesShown))
+        {
+            if (generation != _captureGeneration || _shuttingDown) return;
+            if (item.Kind != CaptureKind.Screenshot || item.Thumbnail is not null) continue;
+
+            var thumbnail = await Task.Run(() => DecodeThumbnail(item.Path));
+            if (generation != _captureGeneration) return;
+            if (thumbnail is not null) item.Thumbnail = thumbnail;
+        }
+    }
+
+    private static Brush? DecodeThumbnail(string path)
+    {
+        try
+        {
+            // Read through a stream the file is not held by: a capture can then still be
+            // deleted, or replaced, while its thumbnail is on screen.
+            using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+
+            var decoder = BitmapDecoder.Create(stream, BitmapCreateOptions.DelayCreation, BitmapCacheOption.None);
+            var portrait = decoder.Frames[0].PixelHeight >= decoder.Frames[0].PixelWidth;
+            stream.Position = 0;
+
+            var image = new BitmapImage();
+            image.BeginInit();
+            image.CacheOption = BitmapCacheOption.OnLoad;
+            image.CreateOptions = BitmapCreateOptions.IgnoreColorProfile;
+            // Decoded at about the size a tile shows it, on whichever side fills the tile.
+            if (portrait) image.DecodePixelWidth = 240;
+            else image.DecodePixelHeight = 180;
+            image.StreamSource = stream;
+            image.EndInit();
+            image.Freeze();
+
+            var brush = new ImageBrush(image) { Stretch = Stretch.UniformToFill };
+            brush.Freeze();
+            return brush;
+        }
+        catch (Exception)
+        {
+            // Not an image after all, still being written, or gone: the tile keeps its blank face.
+            return null;
+        }
+    }
+
+    private void UpdateCaptureTileWidth()
+    {
+        // The scroller's own width less a fixed allowance for its scroll bar, rather than the
+        // viewport: the viewport narrows when the bar appears, which could change the column
+        // count, which could take the bar away again.
+        var available = CapturesScroller.ActualWidth - CaptureList.Margin.Left - CaptureList.Margin.Right - 12;
+        if (available <= 0) return;
+
+        var columns = Math.Max(1, (int)(available / MinCaptureTileWidth));
+        var width = Math.Floor(available / columns);
+        if (CaptureList.Tag is not double current || Math.Abs(current - width) > 0.5) CaptureList.Tag = width;
+    }
+
+    internal static string FormatCaptureTime(DateTime local)
+    {
+        var time = local.ToString("t", CultureInfo.CurrentCulture);
+        if (local.Date == DateTime.Today) return $"Today, {time}";
+        if (local.Date == DateTime.Today.AddDays(-1)) return $"Yesterday, {time}";
+        return local.ToString("d MMM yyyy", CultureInfo.CurrentCulture);
+    }
+
+    // ------------------------------------------------------------------ actions
+
+    private static CaptureItem? CaptureFrom(object sender) => (sender as FrameworkElement)?.DataContext as CaptureItem;
+
+    private void OnCaptureTileClick(object sender, RoutedEventArgs e)
+    {
+        if (CaptureFrom(sender) is { } item) OpenViewer(item);
+    }
+
+    private void OnCaptureOpen(object sender, RoutedEventArgs e)
+    {
+        if (CaptureFrom(sender) is { } item) OpenViewer(item);
+    }
+
+    private void OnCaptureOpenExternal(object sender, RoutedEventArgs e)
+    {
+        if (CaptureFrom(sender) is { } item) OpenCapture(item);
+    }
+
+    /// <summary>Where a press on a tile began, so moving far enough from it drags the file out.</summary>
+    private Point? _tileDragStart;
+
+    private void OnCaptureTilePointerDown(object sender, MouseButtonEventArgs e) => _tileDragStart = e.GetPosition(this);
+
+    /// <summary>A tile dragged out of the gallery carries its file, into Explorer, a chat or a
+    /// document, as a file from Explorer itself would.</summary>
+    private void OnCaptureTilePointerMove(object sender, MouseEventArgs e)
+    {
+        if (_tileDragStart is not { } start) return;
+        if (e.LeftButton != MouseButtonState.Pressed)
+        {
+            _tileDragStart = null;
+            return;
+        }
+
+        var now = e.GetPosition(this);
+        if (Math.Abs(now.X - start.X) < SystemParameters.MinimumHorizontalDragDistance
+            && Math.Abs(now.Y - start.Y) < SystemParameters.MinimumVerticalDragDistance)
+        {
+            return;
+        }
+
+        _tileDragStart = null;
+        if (CaptureFrom(sender) is not { } item || !File.Exists(item.Path)) return;
+
+        try
+        {
+            var data = new DataObject(DataFormats.FileDrop, new[] { item.Path });
+            DragDrop.DoDragDrop((DependencyObject)sender, data, DragDropEffects.Copy);
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"could not drag {item.Path}", ex);
+        }
+        e.Handled = true;
+    }
+
+    private void OnCaptureReveal(object sender, RoutedEventArgs e)
+    {
+        if (CaptureFrom(sender) is { } item && CaptureStillExists(item)) RevealFile(item.Path);
+    }
+
+    private void OnCaptureCopy(object sender, RoutedEventArgs e)
+    {
+        if (CaptureFrom(sender) is { } item) CopyCapture(item);
+    }
+
+    private void OnCaptureDelete(object sender, RoutedEventArgs e)
+    {
+        if (CaptureFrom(sender) is { } item) DeleteCapture(item);
+    }
+
+    private void OnCaptureTileKeyDown(object sender, KeyEventArgs e)
+    {
+        if (CaptureFrom(sender) is not { } item) return;
+
+        if (e.Key == Key.Delete)
+        {
+            DeleteCapture(item);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.C && Keyboard.Modifiers == ModifierKeys.Control)
+        {
+            CopyCapture(item);
+            e.Handled = true;
+        }
+    }
+
+    /// <summary>True if the file is still there; otherwise says so and refreshes the list.</summary>
+    private bool CaptureStillExists(CaptureItem item)
+    {
+        if (File.Exists(item.Path)) return true;
+        ShowToast("That file has been moved or deleted", "");
+        RefreshCaptures();
+        return false;
+    }
+
+    private void OpenCapture(CaptureItem item)
+    {
+        if (!CaptureStillExists(item)) return;
+        try
+        {
+            Process.Start(new ProcessStartInfo(item.Path) { UseShellExecute = true });
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"could not open {item.Path}", ex);
+            ShowToast("No app on this PC opens that file", "");
+        }
+    }
+
+    private void CopyCapture(CaptureItem item)
+    {
+        if (!CaptureStillExists(item)) return;
+        try
+        {
+            // The file itself, so it pastes into Explorer or a chat as an attachment, and for a
+            // screenshot the picture as well, so it pastes into an image editor or a document.
+            var data = new DataObject();
+            data.SetFileDropList(new StringCollection { item.Path });
+            if (item.Kind == CaptureKind.Screenshot)
+            {
+                using var stream = new FileStream(item.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite | FileShare.Delete);
+                var image = new BitmapImage();
+                image.BeginInit();
+                image.CacheOption = BitmapCacheOption.OnLoad;
+                image.StreamSource = stream;
+                image.EndInit();
+                image.Freeze();
+                data.SetImage(image);
+            }
+
+            Clipboard.SetDataObject(data, copy: true);
+            ShowToast(item.Kind == CaptureKind.Screenshot ? "Screenshot copied" : "Recording copied", "");
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"could not copy {item.Path}", ex);
+            ShowToast("The clipboard is busy; try again", "");
+        }
+    }
+
+    /// <returns>True if the file went to the Recycle Bin.</returns>
+    private bool DeleteCapture(CaptureItem item)
+    {
+        if (!CaptureStillExists(item)) return false;
+        try
+        {
+            // The Recycle Bin rather than a delete: one press of a key should never be the end
+            // of a recording.
+            Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(item.Path,
+                Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+        }
+        catch (OperationCanceledException)
+        {
+            return false;
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"could not delete {item.Path}", ex);
+            ShowToast("That file could not be deleted - is it open elsewhere?", "");
+            return false;
+        }
+
+        _allCaptures.Remove(item);
+        ApplyCaptureFilter();
+        ShowToast("Moved to the Recycle Bin", "");
+        return true;
+    }
+}

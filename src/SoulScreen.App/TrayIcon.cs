@@ -19,11 +19,18 @@ internal sealed class TrayIcon : IDisposable
 
     private readonly Forms.NotifyIcon _icon;
     private readonly Forms.ToolStripMenuItem _showItem;
+    private readonly Forms.ToolStripMenuItem _screenshotItem;
+    private readonly Forms.ToolStripMenuItem _recordItem;
+    private readonly Forms.ToolStripMenuItem _miniPlayerItem;
     private readonly Forms.ToolStripMenuItem _receiverItem;
     private readonly Forms.ToolStripMenuItem _disconnectItem;
     private bool _disposed;
 
     public event Action? ShowRequested;
+    public event Action? ScreenshotRequested;
+    public event Action? RecordRequested;
+    public event Action? MiniPlayerRequested;
+    public event Action? CapturesRequested;
     public event Action? ToggleReceiverRequested;
     public event Action? DisconnectRequested;
     public event Action? SettingsRequested;
@@ -36,12 +43,22 @@ internal sealed class TrayIcon : IDisposable
         {
             Font = new Drawing.Font(Forms.Control.DefaultFont, Drawing.FontStyle.Bold),
         };
+        // What can be done to the mirror without bringing the window back: disabled, not
+        // hidden, while nothing is mirroring, so the menu keeps its shape.
+        _screenshotItem = new Forms.ToolStripMenuItem("Take a screenshot", null, (_, _) => ScreenshotRequested?.Invoke()) { Enabled = false };
+        _recordItem = new Forms.ToolStripMenuItem("Start recording", null, (_, _) => RecordRequested?.Invoke()) { Enabled = false };
+        _miniPlayerItem = new Forms.ToolStripMenuItem("Mini player", null, (_, _) => MiniPlayerRequested?.Invoke()) { Enabled = false };
         _receiverItem = new Forms.ToolStripMenuItem("Stop receiver", null, (_, _) => ToggleReceiverRequested?.Invoke());
         _disconnectItem = new Forms.ToolStripMenuItem("Disconnect iPhone", null, (_, _) => DisconnectRequested?.Invoke())
         {
             Enabled = false,
         };
         menu.Items.Add(_showItem);
+        menu.Items.Add(new Forms.ToolStripSeparator());
+        menu.Items.Add(_screenshotItem);
+        menu.Items.Add(_recordItem);
+        menu.Items.Add(_miniPlayerItem);
+        menu.Items.Add(new Forms.ToolStripMenuItem("Captures", null, (_, _) => CapturesRequested?.Invoke()));
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add(_receiverItem);
         menu.Items.Add(_disconnectItem);
@@ -71,13 +88,31 @@ internal sealed class TrayIcon : IDisposable
     }
 
     /// <summary>Updates the hover text and the menu to match the receiver.</summary>
-    public void Update(string status, bool receiverRunning, bool streaming)
+    /// <param name="streaming">A mirrored picture is on screen.</param>
+    public void Update(string status, bool receiverRunning, bool streaming, bool recording)
     {
         // NotifyIcon.Text is limited to 127 characters; longer throws.
         var text = $"SoulScreen - {status}";
-        _icon.Text = text.Length > 120 ? text[..120] : text;
-        _receiverItem.Text = receiverRunning ? "Stop receiver" : "Start receiver";
-        _disconnectItem.Enabled = streaming;
+        text = text.Length > 120 ? text[..120] : text;
+
+        // Called twice a second; the menu is only touched when something about it changed.
+        if (_icon.Text != text) _icon.Text = text;
+        SetText(_receiverItem, receiverRunning ? "Stop receiver" : "Start receiver");
+        SetText(_recordItem, recording ? "Stop recording" : "Start recording");
+        SetEnabled(_disconnectItem, streaming);
+        SetEnabled(_screenshotItem, streaming);
+        SetEnabled(_recordItem, streaming);
+        SetEnabled(_miniPlayerItem, streaming);
+    }
+
+    private static void SetText(Forms.ToolStripMenuItem item, string text)
+    {
+        if (item.Text != text) item.Text = text;
+    }
+
+    private static void SetEnabled(Forms.ToolStripMenuItem item, bool enabled)
+    {
+        if (item.Enabled != enabled) item.Enabled = enabled;
     }
 
     /// <summary>Shows a toast from the notification area.</summary>

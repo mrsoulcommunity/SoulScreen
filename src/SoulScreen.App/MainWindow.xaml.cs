@@ -7,6 +7,7 @@ using System.Windows.Shapes;
 using System.Windows.Threading;
 using SoulScreen.AirPlay;
 using SoulScreen.AirPlay.FairPlay;
+using SoulScreen.App.Logic;
 using SoulScreen.Core.Logging;
 using SoulScreen.Core.Media;
 using SoulScreen.Core.Sources;
@@ -61,6 +62,10 @@ public partial class MainWindow : Window
     private DateTime? _sessionStartedUtc;
     private SourceDeviceInfo? _sessionDevice;
 
+    /// <summary>Which receiver session the decision in force - shown, asked about or turned away -
+    /// was made for, so a phone that takes the receiver over from another is decided afresh.</summary>
+    private DateTime? _decidedSessionKey;
+
     public MainWindow()
     {
         _settings = App.Settings ?? AppSettings.Load();
@@ -72,6 +77,12 @@ public partial class MainWindow : Window
         InitialiseTray();
         InitialiseLog();
         InitialiseShortcutList();
+        InitialisePalette();
+        InitialiseCaptures();
+        InitialiseMiniPlayer();
+        InitialiseSettingsNav();
+        InitialiseMarkup();
+        InitialiseHotkeysAndTaskbar();
 
         WarningList.ItemsSource = _warnings;
 
@@ -87,6 +98,16 @@ public partial class MainWindow : Window
 
         _toastTimer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(2800) };
         _toastTimer.Tick += (_, _) => HideToast();
+        // A toast with an action waits while the pointer is on it, so it cannot vanish from
+        // under a click that is on its way.
+        Toast.MouseEnter += (_, _) => _toastTimer.Stop();
+        Toast.MouseLeave += (_, _) =>
+        {
+            if (Toast.Visibility == Visibility.Visible && Toast.IsHitTestVisible) _toastTimer.Start();
+        };
+
+        // The waiting animation is only worth running while someone could be looking at it.
+        IsVisibleChanged += (_, _) => UpdateRipple();
 
         Closing += OnClosing;
         ThemeManager.Changed += OnThemeApplied;
@@ -108,6 +129,7 @@ public partial class MainWindow : Window
         RefreshWarnings();
         DemoLink.Visibility = DemoSource.IsAvailable ? Visibility.Visible : Visibility.Collapsed;
         _metricsTimer.Start();
+        ShowWelcomeIfFirstRun();
 
         if (_settings.StartReceiverOnLaunch)
         {
@@ -121,6 +143,9 @@ public partial class MainWindow : Window
         }
         else
         {
+            // The button is drawn as "Stop receiver" until told otherwise, which on a receiver
+            // that was never started offered to stop something that was not running.
+            SetReceiverToggle(running: false);
             SetIdleState("Receiver stopped", "Start it when you are ready to mirror.", MirrorSourceState.Stopped);
         }
     }
@@ -157,7 +182,7 @@ public partial class MainWindow : Window
         ReceiverName.Text = _settings.DeviceName;
         IdleReceiverName.Text = _settings.DeviceName;
         PinButton.IsChecked = _settings.AlwaysOnTop;
-        Topmost = _settings.AlwaysOnTop;
+        Topmost = _settings.AlwaysOnTop || _isMiniPlayer;
         // Restores the persisted mute. The Checked handler fires, finds no audio pipeline
         // yet, and re-saves the same value - harmless, and it keeps checkbox, pipeline and
         // file in step from the first frame.
@@ -169,6 +194,7 @@ public partial class MainWindow : Window
     private void OnThemeApplied()
     {
         WindowFrame.SetDarkFrame(this, ThemeManager.IsDark);
+        RecolourAccentSwatches();
     }
 
     // ---------------------------------------------------------------- receiver
@@ -233,7 +259,7 @@ public partial class MainWindow : Window
         try
         {
             await _receiver.StartAsync();
-            ReceiverToggle.Content = "Stop receiver";
+            SetReceiverToggle(running: true);
         }
         catch (Exception ex)
         {
@@ -284,7 +310,7 @@ public partial class MainWindow : Window
         if (!_shuttingDown)
         {
             ShowIdle();
-            ReceiverToggle.Content = "Start receiver";
+            SetReceiverToggle(running: false);
             UpdateTray();
         }
     }
@@ -352,6 +378,9 @@ public partial class MainWindow : Window
     /// </summary>
     private async Task StartDemoAsync()
     {
+        // Ending the demo puts back what was there before it: a receiver that had been stopped
+        // stays stopped, rather than the PC starting to advertise itself unasked.
+        _resumeReceiverAfterDemo = _receiver is not null;
         await StopReceiverAsync();
 
         try
@@ -366,7 +395,7 @@ public partial class MainWindow : Window
             _pipeline.Attach(_demo);
             _sessionIsDemo = true;
             await _demo.StartAsync();
-            ReceiverToggle.Content = "Start receiver";
+            SetReceiverToggle(running: false);
             UpdateTray();
         }
         catch (Exception ex)
@@ -377,14 +406,25 @@ public partial class MainWindow : Window
         }
     }
 
-    /// <summary>Ends the demo and brings the receiver back.</summary>
+    /// <summary>Whether the receiver was running when the demo replaced it.</summary>
+    private bool _resumeReceiverAfterDemo;
+
+    /// <summary>Ends the demo and brings the receiver back, if it was running before.</summary>
     private async Task EndDemoAsync()
     {
         if (!TryBeginReceiverWork()) return;
         try
         {
             await StopReceiverAsync();
-            await StartReceiverAsync();
+            if (_resumeReceiverAfterDemo)
+            {
+                await StartReceiverAsync();
+            }
+            else
+            {
+                SetReceiverToggle(running: false);
+                SetIdleState("Receiver stopped", "Start it when you are ready to mirror.", MirrorSourceState.Stopped);
+            }
         }
         finally
         {
@@ -414,13 +454,41 @@ public partial class MainWindow : Window
                     SetIdleState("Waiting for your iPhone", "This PC is advertising itself on your network.", e.State);
                     break;
                 case MirrorSourceState.Connecting:
+                    // A question on screen, or a session being turned away, is not interrupted -
+                    // nor is a phone already on screen by another merely starting a handshake,
+                    // which may yet be cancelled. Tearing the picture down here ended a recording
+                    // of the first phone for a second that never arrived.
+                    if (_approvalPending || _sessionRejected || VideoHost.Visibility == Visibility.Visible) break;
                     SetIdleState("Connecting", e.Device is { } d ? $"{d.Name} is starting a session." : "A device is starting a session.", e.State);
+                    HoldAudioFor(e.Device);
                     break;
                 case MirrorSourceState.Streaming:
+                {
+                    // AirPlay lets a second phone take the receiver over, and it arrives as another
+                    // Streaming with no end to the first. Whatever was decided - shown, asked about,
+                    // turned away - was about the phone before, so this one is decided afresh.
+                    var sessionKey = _receiver?.SessionStartedAtUtc;
+                    if (sessionKey is not null && _decidedSessionKey is not null && sessionKey != _decidedSessionKey)
+                    {
+                        _log.Info("another device took the receiver over");
+                        EndSessionBookkeeping();
+                        // The first phone's picture comes down before the second is decided on:
+                        // left up, it went on being captured and recorded - showing the new
+                        // phone - while that phone was still waiting to be allowed.
+                        ShowIdle();
+                    }
+
+                    if (_approvalPending || _sessionRejected) break;
+                    if (_sessionStartedUtc is null)
+                    {
+                        _decidedSessionKey = sessionKey;
+                        // A new session is let in, asked about or turned away before anything is shown.
+                        if (!AdmitSession(e.Device ?? ActiveSource?.Device)) break;
+                    }
                     _stateShown = e.State;
-                    BeginSessionBookkeeping(e.Device);
-                    ShowVideo();
+                    StartShowingSession(e.Device);
                     break;
+                }
                 case MirrorSourceState.Faulted:
                     EndSessionBookkeeping();
                     SetIdleState("The receiver stopped", e.Message ?? "See the activity log.", e.State);
@@ -446,9 +514,19 @@ public partial class MainWindow : Window
 
     // ---------------------------------------------------------------- sessions
 
-    private void BeginSessionBookkeeping(SourceDeviceInfo? device)
+    /// <summary>Puts a session that may be seen on screen, and runs the connect actions once.</summary>
+    private void StartShowingSession(SourceDeviceInfo? device)
     {
-        if (_sessionStartedUtc is not null) return;
+        var newSession = BeginSessionBookkeeping(device);
+        ShowVideo();
+        // Once the picture is laid out, so fullscreen and recording act on it.
+        if (newSession) Dispatcher.BeginInvoke(RunConnectActions, DispatcherPriority.Loaded);
+    }
+
+    /// <returns>True if this began a session, false if one was already under way.</returns>
+    private bool BeginSessionBookkeeping(SourceDeviceInfo? device)
+    {
+        if (_sessionStartedUtc is not null) return false;
         _sessionStartedUtc = _receiver?.SessionStartedAtUtc ?? DateTime.UtcNow;
         _sessionDevice = device ?? ActiveSource?.Device;
         _sessionIsDemo = _demo is not null;
@@ -456,17 +534,37 @@ public partial class MainWindow : Window
         if (_sessionIsDemo)
         {
             ShowToast("Demo running - Disconnect ends it", "");
-            return;
+            return true;
         }
 
         var name = _sessionDevice?.Name ?? "iPhone";
         ShowToast($"{name} connected", "");
         NotifyFromTray($"{name} connected", "Screen mirroring has started.");
+        return true;
+    }
+
+    /// <summary>What the user asked to happen whenever a phone starts mirroring.</summary>
+    private void RunConnectActions()
+    {
+        if (_shuttingDown || VideoHost.Visibility != Visibility.Visible) return;
+
+        if (_settings.BringToFrontOnConnect && (!IsVisible || WindowState == WindowState.Minimized))
+            ActivateFromAnotherInstance();
+
+        // Not from the taskbar: a minimised window sent fullscreen remembers "minimised" as the
+        // state to go back to, and Esc would then throw it off the screen.
+        if (_settings.FullscreenOnConnect && IsVisible && WindowState != WindowState.Minimized && !_isFullscreen && !_isMiniPlayer)
+            ToggleFullscreen();
+
+        // A recording nobody asked for of a test pattern is clutter, not a feature.
+        if (_settings.RecordOnConnect && !_sessionIsDemo && RecordButton.IsEnabled && RecordButton.IsChecked != true)
+            RecordButton.IsChecked = true;
     }
 
     /// <summary>Closes the books on a session: history, a toast, the timer.</summary>
     private void EndSessionBookkeeping()
     {
+        _decidedSessionKey = null;
         if (_sessionStartedUtc is not { } started) return;
         var duration = DateTime.UtcNow - started;
         var device = _sessionDevice;
@@ -503,12 +601,11 @@ public partial class MainWindow : Window
         SnapshotButton.IsEnabled = true;
         RecordButton.IsEnabled = _pipeline is not null;
         RecordButton.Visibility = _pipeline is not null ? Visibility.Visible : Visibility.Collapsed;
-        MuteButton.Visibility = _audio is not null ? Visibility.Visible : Visibility.Collapsed;
-        VolumeSlider.Visibility = _audio is not null ? Visibility.Visible : Visibility.Collapsed;
-        VolumeLabel.Visibility = _audio is not null ? Visibility.Visible : Visibility.Collapsed;
-        DisconnectButton.Visibility = Visibility.Visible;
-        StatsButton.Visibility = Visibility.Visible;
+        MarkupButton.Visibility = Visibility.Visible;
         SessionTimer.Visibility = Visibility.Visible;
+        _quality.Reset();
+        QualityIndicator.Visibility = _demo is null ? Visibility.Visible : Visibility.Collapsed;
+        ShowQuality(ConnectionQualityLevel.Unknown);
         // The pipeline was built with the persisted mute and level; the controls follow so
         // they cannot disagree with it from the first frame.
         MuteButton.IsChecked = _settings.Muted;
@@ -524,6 +621,12 @@ public partial class MainWindow : Window
         _noticeDismissed = false;
         ResetZoom();
         ApplyStatsVisibility();
+        // A new session starts live, whatever the last one was left in.
+        SetPaused(false, announce: false);
+        UpdateRecordingPill();
+        UpdateMiniControls();
+        UpdateRipple();
+        PositionOverlays();
 
         // Windows measures idleness by input, so without this the monitor blanks part-way
         // through watching a mirrored phone.
@@ -531,30 +634,44 @@ public partial class MainWindow : Window
 
         var device = ActiveSource?.Device?.Name;
         Title = device is null ? $"SoulScreen - {_settings.DeviceName}" : $"{device} - SoulScreen";
+        // While a phone is on screen the toolbar names the phone, as the window's title does.
+        ReceiverName.Text = device ?? _settings.DeviceName;
 
-        // The session's own controls just appeared, and they may not all fit.
-        LayoutToolbar();
+        UpdateControlBar();
         UpdateAspectLock();
+        UpdatePictureCorners();
+        UpdateTaskbar();
         FadeContentIn(VideoHost);
     }
 
     private void ShowIdle()
     {
+        var wasShowingVideo = VideoHost.Visibility == Visibility.Visible;
+        if (!_shuttingDown)
+        {
+            // A phone-sized floating window has nothing to float once the phone has gone, and
+            // a screen filled with the idle panel is not what anyone was watching.
+            if (_isMiniPlayer) ExitMiniPlayer();
+            if (wasShowingVideo && _isFullscreen && _settings.LeaveFullscreenOnDisconnect) ToggleFullscreen();
+        }
+
         VideoHost.Visibility = Visibility.Collapsed;
         IdlePanel.Visibility = Visibility.Visible;
+        ResetApprovalState();
         SnapshotButton.IsEnabled = false;
         RecordButton.IsEnabled = false;
         RecordButton.IsChecked = false;
         RecordButton.Visibility = Visibility.Collapsed;
-        MuteButton.Visibility = Visibility.Collapsed;
-        VolumeSlider.Visibility = Visibility.Collapsed;
-        VolumeLabel.Visibility = Visibility.Collapsed;
-        DisconnectButton.Visibility = Visibility.Collapsed;
-        StatsButton.Visibility = Visibility.Collapsed;
+        MarkupButton.IsChecked = false;
+        MarkupButton.Visibility = Visibility.Collapsed;
+        QualityIndicator.Visibility = Visibility.Collapsed;
+        _quality.Reset();
         StatsHud.Visibility = Visibility.Collapsed;
         ZoomBadge.Visibility = Visibility.Collapsed;
         SessionTimer.Visibility = Visibility.Collapsed;
         NoticeBar.Visibility = Visibility.Collapsed;
+        SetPaused(false, announce: false);
+        RecordingPill.Visibility = Visibility.Collapsed;
         Video.Clear();
         // The counters belong to the session that has just ended; a new one starts from zero.
         Video.ResetStatistics();
@@ -568,9 +685,12 @@ public partial class MainWindow : Window
 
         DisplaySleep.Release();
         Title = $"SoulScreen - {_settings.DeviceName}";
-        LayoutToolbar();
+        ReceiverName.Text = _settings.DeviceName;
+        UpdateControlBar();
         UpdateAspectLock();
         RefreshNetworkLine();
+        UpdatePictureCorners();
+        UpdateTaskbar();
         FadeContentIn(IdlePanel);
     }
 
@@ -601,6 +721,70 @@ public partial class MainWindow : Window
             _ => "",
         };
         SetHaloPulsing(state == MirrorSourceState.Connecting);
+        UpdateRipple();
+    }
+
+    /// <summary>
+    /// The primary look for "Start receiver", since starting is the one thing to do on a
+    /// stopped receiver; a quiet one for "Stop receiver", which is not.
+    /// </summary>
+    private void SetReceiverToggle(bool running)
+    {
+        ReceiverToggle.Content = running ? "Stop receiver" : "Start receiver";
+        ReceiverToggle.Style = (Style)FindResource(running ? "GhostButton" : "PrimaryButton");
+    }
+
+    private bool _rippling;
+
+    /// <summary>
+    /// Rings spreading out from the idle glyph while the receiver waits for a phone - the
+    /// "broadcasting" look of AirPlay itself. Only while it can be seen, and never when Windows
+    /// has been asked to keep animation to a minimum.
+    /// </summary>
+    private void UpdateRipple()
+    {
+        var wanted = !_shuttingDown
+                     && IsVisible
+                     && WindowState != WindowState.Minimized
+                     && IdlePanel.Visibility == Visibility.Visible
+                     && _stateShown == MirrorSourceState.Ready
+                     && SystemParameters.ClientAreaAnimation;
+        if (wanted == _rippling) return;
+        _rippling = wanted;
+
+        if (wanted)
+        {
+            AnimateRipple(RippleInner, TimeSpan.Zero);
+            AnimateRipple(RippleOuter, TimeSpan.FromMilliseconds(1300));
+            return;
+        }
+
+        foreach (var ring in new[] { RippleInner, RippleOuter })
+        {
+            var scale = (ScaleTransform)ring.RenderTransform;
+            scale.BeginAnimation(ScaleTransform.ScaleXProperty, null);
+            scale.BeginAnimation(ScaleTransform.ScaleYProperty, null);
+            ring.BeginAnimation(OpacityProperty, null);
+        }
+    }
+
+    private static void AnimateRipple(Ellipse ring, TimeSpan delay)
+    {
+        var period = TimeSpan.FromMilliseconds(2600);
+        var grow = new DoubleAnimation(1, 1.6, period)
+        {
+            BeginTime = delay,
+            RepeatBehavior = RepeatBehavior.Forever,
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+        };
+        var scale = (ScaleTransform)ring.RenderTransform;
+        scale.BeginAnimation(ScaleTransform.ScaleXProperty, grow);
+        scale.BeginAnimation(ScaleTransform.ScaleYProperty, grow);
+        ring.BeginAnimation(OpacityProperty, new DoubleAnimation(0.5, 0, period)
+        {
+            BeginTime = delay,
+            RepeatBehavior = RepeatBehavior.Forever,
+        });
     }
 
     /// <summary>A gentle breathing animation on the idle glyph while a phone is negotiating.</summary>
@@ -687,12 +871,22 @@ public partial class MainWindow : Window
 
     // -------------------------------------------------------------------- toast
 
-    /// <summary>Shows a one-line message over the content for a moment.</summary>
-    private void ShowToast(string text, string glyph)
+    private Action? _toastAction;
+
+    /// <summary>
+    /// Shows a one-line message over the content for a moment, optionally with one action -
+    /// "View" - in which case it stays a little longer and waits while the pointer is on it.
+    /// </summary>
+    private void ShowToast(string text, string glyph, string? actionLabel = null, Action? action = null)
     {
         if (_shuttingDown) return;
         ToastText.Text = text;
         ToastGlyph.Text = glyph;
+        _toastAction = action;
+        ToastAction.Content = actionLabel;
+        ToastAction.Visibility = action is null ? Visibility.Collapsed : Visibility.Visible;
+        Toast.IsHitTestVisible = action is not null;
+        _toastTimer.Interval = TimeSpan.FromMilliseconds(action is null ? 2800 : 5000);
         Toast.Visibility = Visibility.Visible;
 
         var ease = new CubicEase { EasingMode = EasingMode.EaseOut };
@@ -704,9 +898,18 @@ public partial class MainWindow : Window
         _toastTimer.Start();
     }
 
+    private void OnToastAction(object sender, RoutedEventArgs e)
+    {
+        var action = _toastAction;
+        _toastAction = null;
+        HideToast();
+        action?.Invoke();
+    }
+
     private void HideToast()
     {
         _toastTimer.Stop();
+        Toast.IsHitTestVisible = false;
         var fade = new DoubleAnimation(0, TimeSpan.FromMilliseconds(260))
         {
             EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn },
@@ -723,14 +926,24 @@ public partial class MainWindow : Window
 
     // --------------------------------------------------------------- shutdown
 
+    /// <summary>Set once teardown has finished and the close it cancelled may go through.</summary>
+    private bool _teardownComplete;
+
     private async void OnClosing(object? sender, System.ComponentModel.CancelEventArgs e)
     {
-        if (_shuttingDown) return;
+        // A second close while teardown is under way - a double click on X, Alt+F4 pressed
+        // twice - must wait for it too: let through, it ended the process while a recording's
+        // index was still being written.
+        if (_shuttingDown)
+        {
+            e.Cancel = !_teardownComplete;
+            return;
+        }
 
         // Close-to-tray: the window goes away, the receiver does not. Only where there is a
         // notification area to go to - otherwise cancelling the close would leave a window
-        // that cannot be shut at all.
-        if (_settings.CloseToTray && _tray is not null && !_quitRequested && !_isFullscreen)
+        // that cannot be shut at all. Fullscreen too: hiding leaves fullscreen first.
+        if (_settings.CloseToTray && _tray is not null && !_quitRequested)
         {
             e.Cancel = true;
             HideToTray();
@@ -753,11 +966,16 @@ public partial class MainWindow : Window
         DisplaySleep.Release();
         _tray?.Dispose();
         _aspectLock?.Dispose();
+        _hotkeys?.Dispose();
+        _laserTimer?.Stop();
+        _snapTimer?.Stop();
+        StopViewerMedia();
         Video.Dispose();
 
         try { await StopReceiverAsync(); }
         catch (Exception ex) { _log.Warn("shutdown was not clean", ex); }
 
+        _teardownComplete = true;
         Close();
     }
 

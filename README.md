@@ -28,7 +28,13 @@ phone's screen at 498x1080 / 59.9 fps.
 | Mirrored video: receive, decrypt, decode, display | working |
 | Audio (AAC-ELD decode and playback) | working |
 | Recording to MP4 | working — video remuxed, audio re-encoded to AAC |
-| Light and dark themes | working — follows Windows, or set by hand |
+| Light and dark themes, eight accent colours | working — follows Windows, or set by hand |
+| Command palette, mini player, captures gallery | working |
+| Markup: pen, highlighter and laser pointer over the picture | working |
+| Captures viewer, with recordings played in place | working |
+| Ask before an iPhone mirrors; allowed and blocked iPhones | working |
+| Connection check: network, firewall and helpers, with fixes | working |
+| Shortcuts from any app, taskbar thumbnail buttons | working |
 | Notification-area icon, launch at sign-in | working |
 | Demo pattern, for trying the app with no phone | working |
 | USB transport | deferred; see [src/SoulScreen.Usb/UsbTransport.cs](src/SoulScreen.Usb/UsbTransport.cs) |
@@ -53,6 +59,10 @@ dotnet run --project src/SoulScreen.Cli -- serve --dump capture
 
 Then on the iPhone: **Control Center → Screen Mirroring → SoulScreen**.
 
+Or double-click `RUN.bat` for the app itself: it builds a Release copy into `artifacts\run`
+and starts it from there, first offering to close a copy that is already running, since only
+one runs at a time.
+
 For a build you can keep and run without the source tree:
 
 ```powershell
@@ -64,10 +74,15 @@ pwsh tools/publish.ps1 -SelfContained  # bundles the .NET runtime too
 
 | | |
 | --- | --- |
+| `Ctrl+K` | Find any command |
 | `F11` | Fullscreen (`Esc` leaves) |
+| `Ctrl+Shift+M` | Mini player (double-click or `Esc` returns) |
+| `Space` | Pause the picture; the phone stays connected |
 | `Ctrl+S` | Screenshot to Pictures\SoulScreen |
+| `Ctrl+G` | Captures: every screenshot and recording |
 | `Ctrl+Shift+C` | Screenshot to the clipboard |
 | `Ctrl+R` | Record the session to MP4 |
+| `Ctrl+E` | Markup: draw over the picture (`Ctrl+Z` takes back a stroke) |
 | `Ctrl+M` | Mute the phone's audio |
 | `Ctrl+↑` `Ctrl+↓` | Volume |
 | `Ctrl+1` … `Ctrl+4` | Fit, fill, stretch, actual size |
@@ -77,10 +92,44 @@ pwsh tools/publish.ps1 -SelfContained  # bundles the .NET runtime too
 | `Ctrl+T` | Keep the window on top |
 | `Ctrl+D` | Disconnect the phone |
 | `Ctrl+L` `Ctrl+,` | Activity log, settings |
+| `Ctrl+Alt+Shift+S` `R` `M` `O` | From any app, once switched on: screenshot, record, mini player, show the window |
 | `F1` | The list above, in the app |
 
 Right-clicking the picture reaches the same things. The whole list is in the app under
 **Settings → Keyboard shortcuts**.
+
+### Finding a command
+
+`Ctrl+K` opens the command palette: type a few letters of what you want - "rec", "mini",
+"light" - and press Enter. It lists only what can be done at that moment, so there is no
+"Stop recording" while nothing is recording, and each row shows its shortcut, which is the
+quickest way to learn them. Every word typed has to match, so "rot up" goes straight to
+turning the picture upright.
+
+### The mini player
+
+`Ctrl+Shift+M` shrinks the window to the phone's screen alone, in the corner of the display,
+above everything else - for keeping an eye on the phone while working in another app. Drag
+the picture to move it - let go near an edge and it settles against it - drag an edge to resize it; mute, pause and screenshot appear over
+the picture while the pointer is on it. Double-click or `Esc` puts the window back exactly
+as it was, and the player reopens next time where and at the size it was left.
+
+### Pausing the picture
+
+`Space` holds the picture still while the phone carries on underneath - to point at
+something during a presentation, or read a message before it scrolls away. Sound, recording
+and the connection all keep going, and resuming lands on the live picture, not on a backlog.
+
+### Captures
+
+`Ctrl+G` shows every screenshot and recording in the capture folder, newest first. Click one
+to look at it without leaving the app: the arrow keys step through the rest, `Space` plays a
+recording and `Delete` sends the one on screen to the Recycle Bin. Drag a tile out to drop the
+file into Explorer or a chat; right-click, or `Ctrl+C` and `Delete` on a focused tile, to copy it (as the file,
+and as the picture for a screenshot), find it in Explorer, or move it to the Recycle Bin. Only
+files SoulScreen named are listed, so pointing the capture folder at Pictures does not bring
+the whole of Pictures in with it. Screenshots can be saved as PNG or, a fraction of the size,
+as JPEG. Two taken in the same second no longer overwrite each other.
 
 Recording remuxes the phone's own H.264 rather than re-encoding it, so the picture costs
 almost nothing and loses no quality. Sound is the exception: the phone sends AAC-ELD, which
@@ -89,6 +138,54 @@ fraction of a core, and a file that plays everywhere. The audio track is laid ag
 picture by arrival time and lost packets become silence, so the two do not drift apart over
 a long recording. Recording starts on the next keyframe, which is why the counter can sit at
 "waiting for a keyframe" for a moment.
+
+### Markup
+
+`Ctrl+E` lays a pen, a highlighter and a laser pointer over the picture, for pointing something
+out in a demonstration or a lesson. `P`, `H`, `L` and `E` pick the pen, highlighter, laser and
+eraser; the round button beside them chooses the ink and the width, and `Ctrl+Z` takes back the
+last stroke. A laser stroke fades on its own a second after it is drawn.
+
+The drawing stays on the picture as the window is resized, zooms with it, and is carried into
+any screenshot taken while marking up, at the phone's own resolution. `Space` still pauses the
+picture, which is the easy way to draw on something that would otherwise scroll away. Leaving
+markup (`Done` or `Esc`) clears the drawing, as does anything that changes the picture's shape:
+a new fit, a rotation, or the phone turning.
+
+### Who may mirror
+
+With **Ask before an iPhone mirrors** (Settings, Privacy), a phone that has not been allowed
+before waits on a question: its screen and sound stay hidden, and nothing of it can be captured,
+until it is allowed. **Always allow** remembers it; **Block this iPhone** turns it away from then
+on, whether asking is switched on or not. Both lists can be edited in the same place.
+
+AirPlay mirroring tells the receiver only a phone's name and model, so that is what the lists go
+by. It keeps the wrong phone off the screen - a housemate's, a colleague's - rather than being a
+lock.
+
+### When the iPhone cannot find this PC
+
+**iPhone can't find this PC?** on the idle screen, or *Check the connection* in the command
+palette, reads everything on this PC that decides it: whether the receiver is running, which
+network the PC is on and whether Windows treats it as public, what Windows Firewall does with
+SoulScreen, and whether the FairPlay helper, the decoder, graphics acceleration and a sound device
+are there. Each gets a plain verdict and, where there is one, a fix. The firewall fix replaces
+whatever rules name SoulScreen - including the block Windows leaves behind when its "allow
+access?" prompt is closed - with rules that allow it, through Windows' own permission prompt.
+**Copy the report** puts the whole check on the clipboard.
+
+### Without the window in front
+
+**Shortcuts that work in any app** (Settings, Window and system) adds `Ctrl+Alt+Shift+S` for a
+screenshot, `R` to record, `M` for the mini player and `O` to bring SoulScreen forward, whichever
+application has the keyboard. They are off by default, since they take keys from every other
+app, and a shortcut another program already holds is named in the settings. The taskbar
+thumbnail carries screenshot, record, mute and mini player buttons, the taskbar button wears a
+red dot while recording, and the notification-area menu can take a screenshot, record, or open
+the mini player and Captures.
+
+A recording watches the drive it is writing to: when space runs low it says roughly how much
+recording time is left, and it stops before the drive fills, so what was recorded stays playable.
 
 ### No phone to hand
 
@@ -106,9 +203,15 @@ restarting it under you as you type.
 
 Worth knowing about:
 
-- **Theme** follows the Windows light or dark setting, or can be pinned either way.
+- **Search** (`Ctrl+F` while the panel is open) narrows every card to the options that match.
+  With the window wide enough, a sidebar lists the sections as System Settings does.
+- **Theme** follows the Windows light or dark setting, or can be pinned either way, and the
+  **accent colour** can be any of Apple's eight.
+- **When a phone connects**, SoulScreen can come to the front, go fullscreen, and start
+  recording on its own - and leave fullscreen again when the phone disconnects.
 - **Fit**, **rotation** and **mirror** decide how the phone's screen sits in the window; the
   window can hold the picture's shape while it is resized.
+- **Round the picture's corners** draws the phone's screen with its own rounded corners.
 - **Smoothness** chooses how much picture is held back to even out Wi-Fi - see below.
 - **Output device** sends the phone's sound to a chosen endpoint rather than the default.
 - **Minimise / close to the notification area** keeps the receiver running with the window

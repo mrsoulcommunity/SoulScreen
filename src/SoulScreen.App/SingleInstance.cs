@@ -9,8 +9,15 @@ namespace SoulScreen.App;
 /// </summary>
 internal sealed class SingleInstance : IDisposable
 {
-    private const string MutexName = @"Local\SoulScreen.SingleInstance";
-    private const string ActivateEventName = @"Local\SoulScreen.Activate";
+    /// <summary>One copy per data folder: a copy given a home of its own with SOULSCREEN_HOME
+    /// has its own settings and identity, so it is a separate app, not a second window of this one.</summary>
+    private static readonly string Scope = AppSettings.HasCustomHome
+        ? "." + Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(
+            System.Text.Encoding.UTF8.GetBytes(AppSettings.Directory.ToUpperInvariant())))[..16]
+        : string.Empty;
+
+    private static readonly string MutexName = $@"Local\SoulScreen.SingleInstance{Scope}";
+    private static readonly string ActivateEventName = $@"Local\SoulScreen.Activate{Scope}";
 
     private readonly Mutex _mutex;
     private readonly EventWaitHandle _activate;

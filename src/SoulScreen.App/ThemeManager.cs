@@ -2,12 +2,13 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using Microsoft.Win32;
+using SoulScreen.App.Logic;
 using SoulScreen.Core.Logging;
 
 namespace SoulScreen.App;
 
 /// <summary>
-/// Recolours the application's brushes for the chosen theme.
+/// Recolours the application's brushes for the chosen theme and accent.
 /// <para>
 /// Every colour in Theme.xaml is a <see cref="SolidColorBrush"/> resource, and every use
 /// of one is a DynamicResource reference. Changing a brush's colour therefore changes every
@@ -31,13 +32,17 @@ internal static class ThemeManager
     /// <summary>The palette actually on screen: System resolved to Dark or Light.</summary>
     public static bool IsDark { get; private set; } = true;
 
+    /// <summary>The accent on screen.</summary>
+    public static AccentColor Accent { get; private set; } = AccentColor.Blue;
+
     /// <summary>Raised on the UI thread after the palette changes, for chrome that is not a brush.</summary>
     public static event Action? Changed;
 
-    /// <summary>Applies a theme. System follows the Windows setting and keeps following it.</summary>
-    public static void Apply(AppTheme theme, bool animate)
+    /// <summary>Applies a theme and accent. System follows the Windows setting and keeps following it.</summary>
+    public static void Apply(AppTheme theme, AccentColor accent, bool animate)
     {
         _requested = theme;
+        Accent = Enum.IsDefined(accent) ? accent : AccentColor.Blue;
         var dark = theme switch
         {
             AppTheme.Dark => true,
@@ -50,10 +55,13 @@ internal static class ThemeManager
         SetPalette(dark, animate);
     }
 
+    /// <summary>The colour an accent swatch is drawn in under the theme now showing.</summary>
+    public static Color SwatchColor(AccentColor accent) => ToColor(AccentPalette.Swatch(accent, IsDark), 0xFF);
+
     private static void SetPalette(bool dark, bool animate)
     {
         var resources = Application.Current.Resources;
-        var palette = dark ? Dark : Light;
+        var palette = (dark ? Dark : Light).Concat(AccentEntries(Accent, dark));
 
         foreach (var (key, color) in palette)
         {
@@ -88,6 +96,20 @@ internal static class ThemeManager
         IsDark = dark;
         Changed?.Invoke();
     }
+
+    /// <summary>The accent brushes, derived from one colour for the theme in force.</summary>
+    private static IEnumerable<(string Key, Color Color)> AccentEntries(AccentColor accent, bool dark)
+    {
+        var shades = AccentPalette.For(accent, dark);
+        yield return ("Accent", ToColor(shades.Accent, 0xFF));
+        yield return ("AccentHover", ToColor(shades.Hover, 0xFF));
+        yield return ("AccentPressed", ToColor(shades.Pressed, 0xFF));
+        yield return ("AccentTint", ToColor(shades.Accent, shades.TintAlpha));
+        yield return ("AccentMuted", ToColor(shades.Muted, 0xFF));
+        yield return ("OnAccent", ToColor(shades.OnAccent, 0xFF));
+    }
+
+    private static Color ToColor(Rgb rgb, byte alpha) => Color.FromArgb(alpha, rgb.R, rgb.G, rgb.B);
 
     /// <summary>Reads the "choose your default app mode" setting.</summary>
     public static bool SystemPrefersDark()
@@ -126,8 +148,8 @@ internal static class ThemeManager
     private static Color C(string hex) => (Color)ColorConverter.ConvertFromString(hex)!;
 
     /// <summary>
-    /// A neutral dark palette. Surfaces are shades of near-black grey; the accent is the
-    /// system blue; text steps from white through two greys.
+    /// A neutral dark palette. Surfaces are shades of near-black grey; text steps from white
+    /// through two greys. The accent brushes come from <see cref="AccentPalette"/>.
     /// </summary>
     private static readonly (string Key, Color Color)[] Dark =
     [
@@ -139,12 +161,6 @@ internal static class ThemeManager
         ("SegmentSelected", C("#FF3A3A40")),
         ("BorderBrush", C("#FF2C2C31")),
         ("BorderSubtle", C("#FF232327")),
-        ("Accent", C("#FF0A84FF")),
-        ("AccentHover", C("#FF3395FF")),
-        ("AccentPressed", C("#FF0071E3")),
-        ("AccentTint", C("#330A84FF")),
-        ("AccentMuted", C("#FF1F4D80")),
-        ("OnAccent", C("#FFFFFFFF")),
         ("TextPrimary", C("#FFF5F5F7")),
         ("TextSecondary", C("#FF9A9AA0")),
         ("TextTertiary", C("#FF636368")),
@@ -158,9 +174,11 @@ internal static class ThemeManager
         ("OverlayChrome", C("#E61C1C1F")),
         ("PanelBackground", C("#F5121214")),
         ("Shadow", C("#99000000")),
+        ("Scrim", C("#8C000000")),
+        ("SidebarBackground", C("#FF161618")),
     ];
 
-    /// <summary>The light palette: warm off-white ground, white cards, the same blue.</summary>
+    /// <summary>The light palette: warm off-white ground, white cards.</summary>
     private static readonly (string Key, Color Color)[] Light =
     [
         ("Surface", C("#FFF2F2F5")),
@@ -171,12 +189,6 @@ internal static class ThemeManager
         ("SegmentSelected", C("#FFFFFFFF")),
         ("BorderBrush", C("#FFD6D6DB")),
         ("BorderSubtle", C("#FFE8E8EC")),
-        ("Accent", C("#FF007AFF")),
-        ("AccentHover", C("#FF2B8FFF")),
-        ("AccentPressed", C("#FF0064D6")),
-        ("AccentTint", C("#26007AFF")),
-        ("AccentMuted", C("#FFB9D6FF")),
-        ("OnAccent", C("#FFFFFFFF")),
         ("TextPrimary", C("#FF1D1D1F")),
         ("TextSecondary", C("#FF6E6E73")),
         ("TextTertiary", C("#FF9C9CA1")),
@@ -190,5 +202,7 @@ internal static class ThemeManager
         ("OverlayChrome", C("#EEF6F6F8")),
         ("PanelBackground", C("#F7F2F2F5")),
         ("Shadow", C("#40000000")),
+        ("Scrim", C("#59000000")),
+        ("SidebarBackground", C("#FFE9E9ED")),
     ];
 }

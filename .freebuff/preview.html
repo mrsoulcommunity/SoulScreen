@@ -1,0 +1,519 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SoulScreen — project preview</title>
+<style>
+  /* Palette lifted verbatim from src/SoulScreen.App/Theme.xaml */
+  :root {
+    --surface: #0E0F13;
+    --raised: #16181F;
+    --hover: #1F2230;
+    --border: #262A36;
+    --accent: #7C6CFF;
+    --accent-muted: #4B41A8;
+    --text-1: #EDEEF2;
+    --text-2: #8E93A3;
+    --text-3: #5C616F;
+    --success: #4ADE80;
+    --warning: #FBBF24;
+    --danger: #F87171;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body {
+    min-height: 100vh;
+    display: flex; align-items: center; justify-content: center;
+    padding: 24px 16px;
+    background: radial-gradient(1200px 800px at 50% -10%, #14161d 0%, #07080b 70%);
+    font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+    font-size: 13px;
+    color: var(--text-1);
+  }
+  code, .mono { font-family: "Cascadia Mono", Consolas, monospace; }
+
+  /* ============================== the window ============================== */
+  .window {
+    width: 460px; max-width: 100%;
+    height: 780px; max-height: calc(100vh - 32px);
+    display: flex; flex-direction: column;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 30px 80px rgba(0,0,0,.55);
+  }
+
+  /* toolbar */
+  .toolbar {
+    flex: 0 0 46px;
+    display: flex; align-items: center;
+    padding-left: 14px;
+    background: var(--raised);
+    border-bottom: 1px solid var(--border);
+    user-select: none;
+  }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--text-3); }
+  .dot.ready { background: var(--accent); }
+  .dot.streaming { background: var(--success); }
+  .receiver-name { margin-left: 10px; font-weight: 600; font-size: 13px; }
+  .toolbar-controls { margin-left: auto; display: flex; align-items: center; padding-right: 4px; }
+
+  .icon-btn {
+    width: 34px; height: 30px; margin: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: transparent; border: 1px solid transparent; border-radius: 6px;
+    color: var(--text-2); cursor: pointer; font-size: 15px; line-height: 1;
+  }
+  .icon-btn:hover { background: var(--hover); color: var(--text-1); }
+  .icon-btn:disabled { color: var(--text-3); cursor: default; }
+  .icon-btn.toggled { background: var(--accent-muted); color: var(--text-1); }
+  .icon-btn:focus-visible { outline: none; border-color: var(--accent-muted); }
+
+  /* volume slider, drawn like the WPF one */
+  .vol-slider {
+    -webkit-appearance: none; appearance: none;
+    width: 72px; height: 30px; margin: 0 4px 0 2px;
+    background: transparent; cursor: pointer;
+  }
+  .vol-slider::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; }
+  .vol-slider::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--text-1); margin-top: -4px;
+  }
+  .vol-slider:hover::-webkit-slider-thumb { background: #fff; }
+  .vol-slider::-moz-range-track { height: 4px; border-radius: 2px; background: var(--border); }
+  .vol-slider::-moz-range-progress { height: 4px; border-radius: 2px; background: var(--accent); }
+  .vol-slider::-moz-range-thumb { width: 12px; height: 12px; border: none; border-radius: 50%; background: var(--text-1); }
+  .vol-label { font-size: 10.5px; color: var(--text-3); margin-right: 4px; min-width: 28px; text-align: right; }
+
+  .divider { width: 1px; height: 22px; background: var(--border); margin: 0 8px; }
+  .caption-btn { width: 44px; height: 46px; border: none; background: transparent; color: var(--text-2); font-size: 10px; cursor: pointer; }
+  .caption-btn:hover { background: var(--hover); color: var(--text-1); }
+  .caption-btn.close:hover { background: #C42B1C; color: #fff; }
+
+  /* content area */
+  .content { position: relative; flex: 1 1 auto; min-height: 0; }
+
+  /* video view */
+  .video-view {
+    position: absolute; inset: 0; display: none;
+    background: #000;
+    align-items: center; justify-content: center;
+  }
+  .video-view.active { display: flex; }
+  .phone-frame {
+    width: 44%; height: 92%;
+    background: linear-gradient(160deg, #1a1c24 0%, #101218 60%, #0a0b0f 100%);
+    border-radius: 22px; border: 1px solid #1f2230;
+    display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+    color: var(--text-3);
+  }
+  .phone-frame .mono { font-size: 11px; }
+  .play-badge { width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; color: var(--text-2); }
+
+  /* idle panel */
+  .idle-panel {
+    position: absolute; inset: 0; overflow-y: auto;
+    display: flex; align-items: center; justify-content: center;
+    padding: 32px 34px;
+  }
+  .idle-panel.hidden, .settings-panel.hidden { display: none; }
+  .idle-inner { max-width: 330px; width: 100%; text-align: center; }
+  .idle-icon { font-size: 34px; color: var(--accent-muted); }
+  h1 { font-size: 22px; font-weight: 600; margin: 16px 0 0; font-family: "Segoe UI Variable Display", "Segoe UI", sans-serif; }
+  .subtitle { color: var(--text-2); font-size: 14px; margin-top: 8px; }
+  .steps {
+    margin-top: 24px; padding: 17px 20px; text-align: left;
+    background: var(--raised); border: 1px solid var(--border); border-radius: 10px;
+  }
+  .step { display: flex; gap: 0; align-items: baseline; }
+  .step + .step { margin-top: 11px; }
+  .step .num { width: 16px; color: var(--accent); font-family: "Cascadia Mono", Consolas, monospace; font-size: 11px; }
+  .step .text { color: var(--text-2); font-size: 14px; }
+  .step .text b { color: var(--text-1); font-weight: 600; }
+
+  .warning-card {
+    margin-top: 14px; padding: 12px 15px; text-align: left;
+    background: rgba(251,191,36,.10); border: 1px solid rgba(251,191,36,.25); border-radius: 9px;
+    display: none;
+  }
+  .warning-card.show { display: block; }
+  .warning-card .t { font-weight: 600; font-size: 13px; color: var(--warning); }
+  .warning-card .d { color: var(--text-3); font-size: 12px; margin-top: 4px; line-height: 1.45; }
+
+  .ghost-btn {
+    margin-top: 20px; padding: 9px 18px;
+    background: transparent; color: var(--text-2);
+    border: 1px solid var(--border); border-radius: 7px;
+    font: inherit; cursor: pointer;
+  }
+  .ghost-btn:hover { background: var(--hover); color: var(--text-1); }
+
+  /* settings overlay */
+  .settings-panel {
+    position: absolute; inset: 0; background: var(--surface);
+    overflow-y: auto; display: none; padding: 28px 30px;
+  }
+  .settings-panel.active { display: block; }
+  .settings-inner { max-width: 340px; margin: 0 auto; }
+  h2 { font-size: 20px; font-weight: 600; margin: 0; }
+  .field-label { color: var(--text-3); font-size: 12px; margin: 22px 0 6px; }
+  .field-hint { color: var(--text-3); font-size: 12px; margin-top: 6px; line-height: 1.4; }
+  input[type="text"] {
+    width: 100%; padding: 7px 9px;
+    background: var(--raised); color: var(--text-1);
+    border: 1px solid var(--border); border-radius: 6px;
+    font: inherit; font-size: 13px;
+  }
+  input[type="text"]:focus { outline: none; border-color: var(--accent); }
+  .row { display: flex; align-items: center; gap: 8px; }
+  .row .sep { color: var(--text-2); font-size: 14px; }
+  input.small { width: 76px; }
+  .check { display: flex; align-items: center; gap: 9px; margin-top: 14px; cursor: pointer; }
+  .check input { width: 16px; height: 16px; accent-color: var(--accent); cursor: pointer; }
+  .settings-actions { display: flex; gap: 10px; margin-top: 24px; }
+  .primary-btn {
+    padding: 9px 18px; border: none; border-radius: 7px; cursor: pointer;
+    background: var(--accent); color: #0E0F13; font: inherit; font-weight: 600;
+  }
+  .primary-btn:hover { opacity: .88; }
+  .identity {
+    margin-top: 24px; padding: 13px 15px;
+    background: var(--raised); border: 1px solid var(--border); border-radius: 9px;
+  }
+  .identity .cap { color: var(--text-3); font-size: 12px; }
+  .identity .mono { color: var(--text-2); font-size: 11px; margin-top: 7px; line-height: 1.6; word-break: break-all; }
+
+  /* log panel */
+  .log-panel {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 210px;
+    display: none; flex-direction: column;
+    background: rgba(14,15,19,.94);
+    border-top: 1px solid var(--border);
+  }
+  .log-panel.open { display: flex; }
+  .log-head { display: flex; align-items: center; padding: 8px 14px 4px; }
+  .log-head .cap { color: var(--text-3); font-size: 12px; }
+  .log-head .spacer { margin-left: auto; display: flex; }
+  .log-body { flex: 1; overflow: auto; padding: 0 14px 10px; }
+  .log-line { font-family: "Cascadia Mono", Consolas, monospace; font-size: 10.5px; line-height: 15px; color: var(--text-2); white-space: nowrap; }
+  .log-line .lv-info { color: var(--text-3); }
+  .log-line .lv-warn { color: var(--warning); }
+
+  /* status bar */
+  .statusbar {
+    flex: 0 0 auto; display: flex; align-items: center;
+    padding: 6px 14px; gap: 14px;
+    background: var(--raised); border-top: 1px solid var(--border);
+  }
+  .status-text { color: var(--text-2); font-family: "Cascadia Mono", Consolas, monospace; font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .metrics { margin-left: auto; color: var(--text-2); font-family: "Cascadia Mono", Consolas, monospace; font-size: 11px; white-space: nowrap; }
+  .metrics .rec { color: var(--danger); }
+
+  /* keyboard hint footer on the page (outside the window) */
+  .page-hint { position: fixed; bottom: 12px; left: 0; right: 0; text-align: center; color: var(--text-3); font-size: 11.5px; }
+  .page-hint code { color: var(--text-2); }
+</style>
+</head>
+<body>
+
+<div class="window" id="win">
+
+  <!-- toolbar / caption -->
+  <div class="toolbar">
+    <div class="dot" id="statusDot"></div>
+    <div class="receiver-name" id="receiverName">SoulScreen</div>
+    <div class="toolbar-controls">
+      <button class="icon-btn" id="recordBtn" title="Record to MP4 (Ctrl+R)" aria-label="Record the session" disabled hidden>&#9679;</button>
+      <button class="icon-btn" id="muteBtn" title="Mute the phone's audio (Ctrl+M)" aria-label="Mute the phone's audio" hidden>&#128263;</button>
+      <input type="range" class="vol-slider" id="volSlider" min="0" max="100" value="100" aria-label="Phone audio volume" hidden>
+      <span class="vol-label" id="volLabel" hidden>100%</span>
+      <button class="icon-btn" id="snapshotBtn" title="Save a screenshot (Ctrl+S)" aria-label="Save a screenshot" disabled hidden>&#128247;</button>
+      <button class="icon-btn" id="pinBtn" title="Keep on top" aria-label="Keep on top">&#128204;</button>
+      <button class="icon-btn" id="fullscreenBtn" title="Fullscreen (F11)" aria-label="Fullscreen">&#9974;</button>
+      <button class="icon-btn" id="logBtn" title="Activity log" aria-label="Activity log">&#128220;</button>
+      <button class="icon-btn" id="settingsBtn" title="Settings" aria-label="Settings">&#9881;</button>
+      <div class="divider"></div>
+      <button class="caption-btn" title="Minimise" aria-label="Minimise">&#8211;</button>
+      <button class="caption-btn" title="Maximise" aria-label="Maximise">&#9633;</button>
+      <button class="caption-btn close" title="Close" aria-label="Close">&#10005;</button>
+    </div>
+  </div>
+
+  <!-- content -->
+  <div class="content">
+
+    <!-- streaming view -->
+    <div class="video-view" id="videoView">
+      <div class="phone-frame">
+        <div class="play-badge">&#9203;</div>
+        <div class="mono">mirrored 498&times;1080 &middot; 59.9 fps</div>
+        <div class="mono" id="hudBuf">buf 4 &middot; 41 ms &middot; 0 lost</div>
+      </div>
+    </div>
+
+    <!-- idle panel -->
+    <div class="idle-panel" id="idlePanel">
+      <div class="idle-inner">
+        <div class="idle-icon">&#8981;</div>
+        <h1 id="idleTitle">Waiting for your iPhone</h1>
+        <div class="subtitle" id="idleSubtitle">This PC is advertising itself on your network.</div>
+
+        <div class="steps">
+          <div class="step"><span class="num">1</span><span class="text">Open Control Center on the iPhone</span></div>
+          <div class="step"><span class="num">2</span><span class="text">Tap Screen Mirroring</span></div>
+          <div class="step"><span class="num">3</span><span class="text">Choose <b id="idleReceiverName">SoulScreen</b></span></div>
+        </div>
+
+        <div class="warning-card" id="fairplayWarning">
+          <div class="t">FairPlay support is not installed</div>
+          <div class="d">The iPhone will find this PC but refuse to mirror. Build the helper with <span class="mono">pwsh tools/build-fairplay.ps1</span> and restart SoulScreen.</div>
+        </div>
+
+        <button class="ghost-btn" id="receiverToggle">Stop receiver</button>
+      </div>
+    </div>
+
+    <!-- settings overlay -->
+    <div class="settings-panel" id="settingsPanel">
+      <div class="settings-inner">
+        <h2>Settings</h2>
+
+        <div class="field-label">Receiver name</div>
+        <input type="text" id="nameBox" value="SoulScreen">
+        <div class="field-hint">What the iPhone shows in its Screen Mirroring list.</div>
+
+        <div class="field-label">Control port</div>
+        <input type="text" class="small" id="portBox" value="7000" style="width:110px">
+        <div class="field-hint">7000 is what Apple receivers use. Change it only if something else holds the port.</div>
+
+        <div class="field-label">Advertised resolution</div>
+        <div class="row">
+          <input type="text" class="small" id="widthBox" value="1920">
+          <span class="sep">x</span>
+          <input type="text" class="small" id="heightBox" value="1080">
+          <span class="sep">at</span>
+          <input type="text" class="small" id="refreshBox" value="60" style="width:56px">
+          <span class="sep">fps</span>
+        </div>
+        <div class="field-hint">The phone encodes to fit this. Lower it if the picture stutters over Wi-Fi.</div>
+
+        <label class="check"><input type="checkbox" id="audioCheck" checked> Receive audio from the phone</label>
+        <label class="check"><input type="checkbox" id="autoStartCheck" checked> Start the receiver when SoulScreen opens</label>
+        <label class="check"><input type="checkbox" id="traceCheck"> Log every protocol message</label>
+
+        <div class="identity">
+          <div class="cap">This receiver</div>
+          <div class="mono">device id&nbsp;&nbsp;AA:BB:CC:DD:EE:FF<br>port&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;7000</div>
+        </div>
+
+        <div class="settings-actions">
+          <button class="primary-btn" id="applyBtn">Apply and restart receiver</button>
+          <button class="ghost-btn" id="cancelBtn" style="margin-top:0">Cancel</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- log panel -->
+    <div class="log-panel" id="logPanel">
+      <div class="log-head">
+        <span class="cap">Activity</span>
+        <span class="spacer">
+          <button class="icon-btn" title="Copy" aria-label="Copy the activity log">&#128203;</button>
+          <button class="icon-btn" title="Clear" aria-label="Clear the activity log" id="clearLogBtn">&#10005;</button>
+        </span>
+      </div>
+      <div class="log-body" id="logBody"></div>
+    </div>
+
+  </div>
+
+  <!-- status bar -->
+  <div class="statusbar">
+    <div class="status-text" id="statusText">Advertising as "SoulScreen" on port 7000</div>
+    <div class="metrics" id="metricsText"></div>
+  </div>
+</div>
+
+<div class="page-hint">This is a browser mock of the WPF shell. Try the <code>Settings</code>, <code>Activity log</code> and <code>Keep on top</code> buttons &middot; <code>Ctrl+M</code> / <code>Ctrl+R</code> / <code>F11</code> work here too.</div>
+
+<script>
+(function () {
+  "use strict";
+
+  var $ = function (id) { return document.getElementById(id); };
+  var dot = $("statusDot"), statusText = $("statusText"), metricsText = $("metricsText");
+  var idlePanel = $("idlePanel"), videoView = $("videoView"), settingsPanel = $("settingsPanel");
+  var logPanel = $("logPanel"), logBody = $("logBody");
+  var recordBtn = $("recordBtn"), muteBtn = $("muteBtn"), volSlider = $("volSlider"), volLabel = $("volLabel");
+  var snapshotBtn = $("snapshotBtn"), pinBtn = $("pinBtn"), logBtn = $("logBtn"), settingsBtn = $("settingsBtn");
+  var fullscreenBtn = $("fullscreenBtn"), receiverToggle = $("receiverToggle");
+  var win = $("win");
+  var streaming = false, recording = false, recStart = 0, recTimer = null;
+
+  // ------------------------------------------------------------- log
+  var bootLines = [
+    ["INFO ", "ui",      "render tier 2: full hardware acceleration"],
+    ["INFO ", "fairplay", "native helper loaded: soulscreen_fairplay 1.4"],
+    ["INFO ", "settings", "settings loaded from %LOCALAPPDATA%\\SoulScreen\\settings.json"],
+    ["INFO ", "airplay",  "receiver \"SoulScreen\" ready on port 7000"],
+    ["INFO ", "mdns",     "advertising _airplay._tcp and _raop._tcp"],
+  ];
+  function stamp() {
+    var d = new Date();
+    function p(n, w) { var s = String(n); while (s.length < (w || 2)) s = "0" + s; return s; }
+    return p(d.getHours()) + ":" + p(d.getMinutes()) + ":" + p(d.getSeconds()) + "." + p(d.getMilliseconds(), 3);
+  }
+  function logLine(level, category, message) {
+    var div = document.createElement("div");
+    div.className = "log-line";
+    div.innerHTML = '<span class="lv-' + level.toLowerCase() + '">' + stamp() + " " + level + "</span> [" + category + "] " + message;
+    logBody.appendChild(div);
+    logBody.scrollTop = logBody.scrollHeight;
+  }
+  bootLines.forEach(function (l) { logLine(l[0], l[1], l[2]); });
+
+  // ------------------------------------------------------------- views
+  function showStreaming(on) {
+    streaming = on;
+    videoView.classList.toggle("active", on);
+    idlePanel.classList.toggle("hidden", on);
+    recordBtn.hidden = !on; snapshotBtn.hidden = !on; muteBtn.hidden = !on;
+    volSlider.hidden = !on; volLabel.hidden = !on;
+    recordBtn.disabled = false; snapshotBtn.disabled = false;
+    dot.className = "dot " + (on ? "streaming" : "ready");
+    receiverToggle.textContent = on ? "Stop receiver" : "Start receiver";
+    if (on) {
+      statusText.textContent = "Kasra's iPhone (iPhone17,1) - mirroring";
+      tickMetrics();
+    } else {
+      statusText.textContent = 'Advertising as "SoulScreen" on port 7000';
+      metricsText.textContent = "";
+      stopRecTimer();
+      recording = false; recordBtn.classList.remove("toggled");
+    }
+  }
+
+  receiverToggle.addEventListener("click", function () {
+    var starting = !streaming;
+    receiverToggle.disabled = true;
+    logLine("INFO ", "ui", starting ? "starting the receiver" : "stopping the receiver");
+    setTimeout(function () {
+      receiverToggle.disabled = false;
+      if (starting) { logLine("INFO ", "airplay", 'receiver "SoulScreen" ready on port 7000'); showStreaming(true); }
+      else { logLine("INFO ", "airplay", "receiver stopped"); showStreaming(false); }
+    }, 600);
+  });
+
+  // ------------------------------------------------- settings
+  settingsBtn.addEventListener("click", function () {
+    var open = settingsPanel.classList.toggle("active");
+    settingsBtn.classList.toggle("toggled", open);
+    if (open) { $("nameBox").value = $("receiverName").textContent; }
+  });
+  $("cancelBtn").addEventListener("click", function () {
+    settingsPanel.classList.remove("active");
+    settingsBtn.classList.remove("toggled");
+  });
+  $("applyBtn").addEventListener("click", function () {
+    var name = $("nameBox").value.trim();
+    var port = parseInt($("portBox").value, 10);
+    if (!name) { alert("The receiver needs a name."); return; }
+    if (!port || port < 1 || port > 65535) { alert("The control port must be between 1 and 65535."); return; }
+    var w = parseInt($("widthBox").value, 10), h = parseInt($("heightBox").value, 10), r = parseInt($("refreshBox").value, 10);
+    if (isNaN(w) || isNaN(h) || isNaN(r)) { alert("Width, height and refresh rate must be whole numbers."); return; }
+    $("receiverName").textContent = name;
+    $("idleReceiverName").textContent = name;
+    settingsPanel.classList.remove("active");
+    settingsBtn.classList.remove("toggled");
+    logLine("INFO ", "settings", "settings saved; restarting the receiver");
+    showStreaming(false);
+    statusText.textContent = 'Advertising as "' + name + '" on port ' + port;
+  });
+
+  // ------------------------------------------------- toolbar
+  pinBtn.addEventListener("click", function () { pinBtn.classList.toggle("toggled"); });
+  muteBtn.addEventListener("click", function () {
+    var muted = muteBtn.classList.toggle("toggled");
+    muteBtn.innerHTML = muted ? "&#128263;" : "&#128266;";
+    muteBtn.title = muted ? "Unmute the phone's audio (Ctrl+M)" : "Mute the phone's audio (Ctrl+M)";
+    updateVolLabel();
+    logLine("INFO ", "audio-out", muted ? "muted" : "unmuted");
+  });
+  volSlider.addEventListener("input", updateVolLabel);
+  function updateVolLabel() {
+    var pct = muteBtn.classList.contains("toggled") ? 0 : volSlider.value;
+    volLabel.textContent = pct + "%";
+  }
+  recordBtn.addEventListener("click", function () {
+    recording = recordBtn.classList.toggle("toggled");
+    if (recording) {
+      recStart = Date.now();
+      logLine("INFO ", "recorder", "recording will start on the next keyframe");
+      transient("Recording to SoulScreen-" + new Date().toISOString().slice(0, 10).replace(/-/g, "") + ".mp4");
+      recTimer = setInterval(tickMetrics, 500);
+    } else {
+      stopRecTimer();
+      transient("Saved session.mp4");
+      logLine("INFO ", "recorder", "recording saved");
+    }
+  });
+  function stopRecTimer() { if (recTimer) { clearInterval(recTimer); recTimer = null; } }
+
+  logBtn.addEventListener("click", function () {
+    var open = logPanel.classList.toggle("open");
+    logBtn.classList.toggle("toggled", open);
+  });
+  $("clearLogBtn").addEventListener("click", function () { logBody.innerHTML = ""; });
+
+  fullscreenBtn.addEventListener("click", toggleFullscreen);
+  function toggleFullscreen() {
+    var on = win.classList.toggle("fullscreen");
+    fullscreenBtn.classList.toggle("toggled", on);
+    if (on) {
+      win.style.width = "100vw"; win.style.height = "100vh"; win.style.maxHeight = "100vh";
+      win.style.borderRadius = "0"; win.style.border = "none";
+    } else {
+      win.style.width = ""; win.style.height = ""; win.style.borderRadius = ""; win.style.border = "";
+    }
+  }
+
+  // Simulate a phone connecting a moment after load, like a real session.
+  setTimeout(function () {
+    logLine("INFO ", "airplay", "Kasra's iPhone is starting a session");
+    setTimeout(function () { logLine("INFO ", "airplay", "pair-verify completed"); showStreaming(true); }, 900);
+  }, 2200);
+
+  // ------------------------------------------------- metrics
+  var transientUntil = 0;
+  function transient(msg) { statusText.textContent = msg; transientUntil = Date.now() + 4000; }
+  function tickMetrics() {
+    if (!streaming) return;
+    if (Date.now() >= transientUntil && statusText.textContent !== "Kasra's iPhone (iPhone17,1) - mirroring") {
+      statusText.textContent = "Kasra's iPhone (iPhone17,1) - mirroring";
+    }
+    var parts = ["498x1080", "59.9 fps", "60 Hz", "41.2 ms", "buf 4"];
+    if (recording) {
+      var s = Math.floor((Date.now() - recStart) / 1000);
+      var mm = ("0" + Math.floor(s / 60)).slice(-2), ss = ("0" + (s % 60)).slice(-2);
+      parts.push('REC ' + mm + ':' + ss + "  1.4 MB");
+    }
+    metricsText.innerHTML = parts.join("   ").replace(/REC/, '<span class="rec">REC</span>');
+  }
+  setInterval(tickMetrics, 500);
+
+  // ------------------------------------------------- keyboard
+  document.addEventListener("keydown", function (e) {
+    var tag = (document.activeElement && document.activeElement.tagName) || "";
+    if (tag === "INPUT" || tag === "TEXTAREA") return;
+    if (e.key === "F11") { e.preventDefault(); toggleFullscreen(); }
+    else if (e.ctrlKey && (e.key === "m" || e.key === "M")) { e.preventDefault(); if (!muteBtn.hidden) muteBtn.click(); }
+    else if (e.ctrlKey && (e.key === "r" || e.key === "R")) { e.preventDefault(); if (!recordBtn.hidden && !recordBtn.disabled) recordBtn.click(); }
+  });
+})();
+</script>
+</body>
+</html>

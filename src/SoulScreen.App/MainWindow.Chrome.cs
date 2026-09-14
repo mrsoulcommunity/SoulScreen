@@ -15,13 +15,6 @@ namespace SoulScreen.App;
 /// </summary>
 public partial class MainWindow
 {
-    /// <summary>The toolbar's actions, in the order the toolbar shows them.</summary>
-    private FrameworkElement[] _toolbarActions = [];
-
-    /// <summary>The order in which actions give up their place when the toolbar is too narrow
-    /// for all of them.</summary>
-    private FrameworkElement[] _overflowOrder = [];
-
     /// <summary>Hides the pointer, and the overlaid controls, after a moment of stillness in fullscreen.</summary>
     private DispatcherTimer? _cursorTimer;
 
@@ -36,25 +29,10 @@ public partial class MainWindow
 
     private void InitialiseChrome()
     {
-        _toolbarActions =
-        [
-            RecordButton, MuteButton, VolumeGroup, SnapshotButton, DisconnectButton, StatsButton,
-            PinButton, FullscreenButton, LogButton, SettingsButton,
-        ];
-        // Least used first; the controls a mirror is actually driven with - mute and
-        // fullscreen - hold their place longest.
-        _overflowOrder =
-        [
-            StatsButton, PinButton, LogButton, DisconnectButton, VolumeGroup, RecordButton,
-            SnapshotButton, SettingsButton, FullscreenButton, MuteButton,
-        ];
-        ConfigureOverflow();
+        ConfigureMoreMenu();
+        InitialiseControlBar();
         HideWhenCramped(ReceiverName);
         HideWhenCramped(StatusText);
-        // The window's size, not the toolbar's: a toolbar whose contents overflow is laid out
-        // at the width of its contents, so it would stop reporting changes exactly when the
-        // window got too narrow for it.
-        SizeChanged += (_, _) => LayoutToolbar();
 
         // Window-wide rather than on the video host alone: the log and the notice bar sit
         // over the picture in fullscreen, and a pointer resting on them would otherwise stay
@@ -62,6 +40,7 @@ public partial class MainWindow
         MouseMove += OnPointerMoved;
 
         KeyDown += OnKeyDown;
+        PreviewKeyDown += OnPreviewKeyDown;
         StateChanged += OnWindowStateChanged;
 
         SourceInitialized += (_, _) =>
@@ -80,7 +59,7 @@ public partial class MainWindow
     }
 
     /// <summary>Height of the toolbar and status bar as they take room from the picture.</summary>
-    private double ChromeHeight() => _isFullscreen ? 0 : Toolbar.ActualHeight + StatusBar.ActualHeight;
+    private double ChromeHeight() => _isFullscreen || _isMiniPlayer ? 0 : Toolbar.ActualHeight + StatusBar.ActualHeight;
 
     // ------------------------------------------------------------- placement
 
@@ -108,6 +87,21 @@ public partial class MainWindow
 
     private void SaveWindowBounds()
     {
+        if (_isMiniPlayer)
+        {
+            RememberMiniPlayerPlacement();
+            // The window to remember is the one the mini player was opened from.
+            if (_boundsBeforeMini.Width > 0 && _boundsBeforeMini.Height > 0)
+            {
+                _settings.WindowLeft = _boundsBeforeMini.Left;
+                _settings.WindowTop = _boundsBeforeMini.Top;
+                _settings.WindowWidth = _boundsBeforeMini.Width;
+                _settings.WindowHeight = _boundsBeforeMini.Height;
+            }
+            _settings.WindowMaximized = _stateBeforeMini == WindowState.Maximized;
+            return;
+        }
+
         if (_isFullscreen)
         {
             // The size to remember is the one fullscreen was entered from.
@@ -131,11 +125,13 @@ public partial class MainWindow
 
     private void OnPinChanged(object sender, RoutedEventArgs e)
     {
-        Topmost = PinButton.IsChecked == true;
+        var pinned = PinButton.IsChecked == true;
+        // The mini player floats whatever the setting; the setting is what the window returns to.
+        Topmost = pinned || _isMiniPlayer;
         if (_settings is null) return;
-        _settings.AlwaysOnTop = Topmost;
+        _settings.AlwaysOnTop = pinned;
         _settings.Save();
-        if (OnTopCheck is not null) OnTopCheck.IsChecked = Topmost;
+        if (OnTopCheck is not null) OnTopCheck.IsChecked = pinned;
     }
 
     private void OnMinimise(object sender, RoutedEventArgs e) => WindowState = WindowState.Minimized;
@@ -145,92 +141,34 @@ public partial class MainWindow
 
     private void OnClose(object sender, RoutedEventArgs e) => Close();
 
-    /// <summary>
-    /// Fits the toolbar to the window. The window controls always keep their place, and the
-    /// actions that do not fit beside them move, least used first, into the popup behind
-    /// <see cref="MoreButton"/>.
-    /// <para>
-    /// A mirrored phone makes the window about as narrow as a phone, and the full row of
-    /// actions is wider than that. Laid out as one strip, it pushed minimise, maximise and
-    /// close off the edge of the window the moment a session started.
-    /// </para>
-    /// </summary>
-    private void LayoutToolbar()
+    /// <summary>Wires up the menu behind the toolbar's last button.</summary>
+    private void ConfigureMoreMenu()
     {
-        // Measured from the room the window gives its content rather than from the toolbar's
-        // own ActualWidth, which grows to fit its contents whenever they overflow.
-        var width = LayoutInformation.GetLayoutSlot(RootGrid).Width
-                    - RootGrid.Margin.Left - RootGrid.Margin.Right
-                    - ToolbarLayout.Margin.Left - ToolbarLayout.Margin.Right;
-        if (width <= 0) return;
-
-        var unbounded = new Size(double.PositiveInfinity, double.PositiveInfinity);
-        foreach (var action in _toolbarActions) action.Measure(unbounded);
-        CaptionButtons.Measure(unbounded);
-
-        // The status dot stays, however little room that leaves the name beside it.
-        var room = width - CaptionButtons.DesiredSize.Width - StatusDot.Width - ToolbarIdentity.Margin.Right;
-        // Collapsed actions measure to nothing, so this is only what the current state shows.
-        var needed = _toolbarActions.Sum(action => action.DesiredSize.Width);
-
-        var overflow = new HashSet<FrameworkElement>();
-        if (needed > room)
-        {
-            room -= MoreButton.Width;
-            foreach (var action in _overflowOrder)
-            {
-                if (needed <= room) break;
-                if (action.DesiredSize.Width <= 0) continue;
-                overflow.Add(action);
-                needed -= action.DesiredSize.Width;
-            }
-        }
-
-        foreach (var action in _toolbarActions)
-            MoveAction(action, overflow.Contains(action) ? OverflowActions : ToolbarActions);
-
-        MoreButton.Visibility = overflow.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
-        if (overflow.Count == 0) MoreButton.IsChecked = false;
-    }
-
-    /// <summary>Moves an action into <paramref name="panel"/>, placed in toolbar order among the
-    /// actions already there. Does nothing if it is there already.</summary>
-    private void MoveAction(FrameworkElement action, Panel panel)
-    {
-        if (ReferenceEquals(action.Parent, panel)) return;
-        (action.Parent as Panel)?.Children.Remove(action);
-
-        var order = Array.IndexOf(_toolbarActions, action);
-        var index = 0;
-        while (index < panel.Children.Count
-               && Array.IndexOf(_toolbarActions, panel.Children[index] as FrameworkElement) < order)
-        {
-            index++;
-        }
-
-        panel.Children.Insert(index, action);
-    }
-
-    /// <summary>Wires up the popup the toolbar spills into when the window is narrow.</summary>
-    private void ConfigureOverflow()
-    {
-        // Right edges aligned, just below the button: the popup opens back over the toolbar
-        // rather than past the edge of a window that is narrow whenever it is needed.
-        OverflowPopup.CustomPopupPlacementCallback = (popupSize, targetSize, _) =>
-            [new CustomPopupPlacement(new Point(targetSize.Width - popupSize.Width + 8, targetSize.Height - 4), PopupPrimaryAxis.Horizontal)];
+        // Right edges aligned, just below the button: the menu opens back over the window
+        // rather than past the edge of one that is only as wide as a phone.
+        MorePopup.CustomPopupPlacementCallback = (popupSize, targetSize, _) =>
+            [new CustomPopupPlacement(new Point(targetSize.Width - popupSize.Width + 10, targetSize.Height - 4), PopupPrimaryAxis.Horizontal)];
 
         // StaysOpen="False" closes the popup on any click outside it - including one on the
         // button, which would then toggle it straight back open. While it is open the button
         // is taken out of hit testing, so that click only closes it.
-        OverflowPopup.Opened += (_, _) => MoreButton.IsHitTestVisible = false;
-        OverflowPopup.Closed += (_, _) => MoreButton.IsHitTestVisible = true;
-
-        // A button has done its job once clicked. The volume slider is not one, and keeps the
-        // popup open while it is dragged.
-        OverflowActions.AddHandler(ButtonBase.ClickEvent, new RoutedEventHandler((_, e) =>
+        MorePopup.Opened += (_, _) =>
         {
-            if (e.Source is ButtonBase) MoreButton.IsChecked = false;
-        }));
+            MoreButton.IsHitTestVisible = false;
+            // Keyboard users arrive in the menu, not left on a button behind it.
+            Dispatcher.BeginInvoke(() => MoreMenu.Children.OfType<ButtonBase>().FirstOrDefault()?.Focus(), DispatcherPriority.Input);
+        };
+        MorePopup.Closed += (_, _) => MoreButton.IsHitTestVisible = true;
+
+        // Every row has done its job once clicked.
+        MoreMenu.AddHandler(ButtonBase.ClickEvent, new RoutedEventHandler((_, _) => MoreButton.IsChecked = false));
+        MoreMenu.PreviewKeyDown += (_, e) =>
+        {
+            if (e.Key != Key.Escape) return;
+            MoreButton.IsChecked = false;
+            MoreButton.Focus();
+            e.Handled = true;
+        };
     }
 
     /// <summary>
@@ -243,6 +181,18 @@ public partial class MainWindow
 
     private void OnWindowStateChanged(object? sender, EventArgs e)
     {
+        if (_isMiniPlayer && WindowState == WindowState.Maximized)
+        {
+            // Win+Up or a snap: a maximised mini player would just be a window with no toolbar.
+            Dispatcher.BeginInvoke(() =>
+            {
+                if (_isMiniPlayer && WindowState == WindowState.Maximized) WindowState = WindowState.Normal;
+            });
+            return;
+        }
+
+        UpdateRipple();
+
         // Restore glyph while maximised, maximise glyph otherwise.
         MaximiseButton.Content = WindowState == WindowState.Maximized ? "" : "";
         MaximiseButton.ToolTip = WindowState == WindowState.Maximized ? "Restore" : "Maximise";
@@ -273,7 +223,9 @@ public partial class MainWindow
 
     private void EnterFullscreen()
     {
-        _stateBeforeFullscreen = WindowState;
+        if (_isMiniPlayer) ExitMiniPlayer();
+        // Minimised is never a state to come back to from fullscreen.
+        _stateBeforeFullscreen = WindowState == WindowState.Minimized ? WindowState.Normal : WindowState;
         _isFullscreen = true;
         // The custom chrome reserves a resize border that would show as a seam against
         // the screen edge, so fullscreen drops it entirely.
@@ -298,10 +250,12 @@ public partial class MainWindow
         StatusBar.SetResourceReference(BackgroundProperty, "OverlayChrome");
         _chromeShown = true;
         ShowChrome();
+        ApplyOverlayInsets();
+        UpdatePictureCorners();
 
         _cursorTimer ??= CreateCursorTimer();
         _cursorTimer.Start();
-        Dispatcher.InvokeAsync(LayoutToolbar, DispatcherPriority.Loaded);
+        Dispatcher.InvokeAsync(UpdateControlBar, DispatcherPriority.Loaded);
     }
 
     private void ExitFullscreen()
@@ -328,13 +282,34 @@ public partial class MainWindow
             strip.IsHitTestVisible = true;
         }
         _chromeShown = true;
+        ApplyOverlayInsets();
+        UpdatePictureCorners();
 
-        // The toolbar was skipped while hidden, and the window may come back at the size it
-        // left, which raises no SizeChanged; fit it once the layout has settled.
-        Dispatcher.InvokeAsync(LayoutToolbar, DispatcherPriority.Loaded);
+        // The window may come back at the size it left, which raises no SizeChanged; fit the
+        // control bar once the layout has settled.
+        Dispatcher.InvokeAsync(UpdateControlBar, DispatcherPriority.Loaded);
 
         _cursorTimer?.Stop();
         Cursor = null;
+    }
+
+    /// <summary>
+    /// In fullscreen the toolbar and status bar float over the content, where they would cover
+    /// the head of every panel and the foot of the log; the panels are inset to clear them.
+    /// </summary>
+    private void ApplyOverlayInsets()
+    {
+        var top = _isFullscreen ? Toolbar.Height : 0;
+        var bottom = _isFullscreen ? StatusBar.ActualHeight : 0;
+        var inset = new Thickness(0, top, 0, bottom);
+        SettingsPanel.Padding = inset;
+        CapturesPanel.Padding = inset;
+        HelpPanel.Padding = inset;
+        DoctorPanel.Padding = inset;
+        ApprovalPanel.Padding = inset;
+        ViewerPanel.Padding = inset;
+        LogPanel.Margin = new Thickness(0, 0, 0, bottom);
+        PositionOverlays();
     }
 
     private DispatcherTimer CreateCursorTimer()
@@ -354,6 +329,7 @@ public partial class MainWindow
     /// </summary>
     private void OnPointerMoved(object sender, MouseEventArgs e)
     {
+        OnPointerMovedForControlBar(e);
         if (!_isFullscreen) return;
         if (Cursor == Cursors.None) Cursor = null;
         ShowChrome();
@@ -366,8 +342,8 @@ public partial class MainWindow
         _cursorTimer?.Stop();
         if (!_isFullscreen) return;
         // A pointer resting on the controls, or a menu open from them, means they are in use.
-        if (Toolbar.IsMouseOver || StatusBar.IsMouseOver || MoreButton.IsChecked == true) return;
-        if (SettingsPanel.Visibility == Visibility.Visible || HelpPanel.Visibility == Visibility.Visible) return;
+        if (Toolbar.IsMouseOver || StatusBar.IsMouseOver || MoreButton.IsChecked == true || IsControlBarInUse) return;
+        if (IsPanelOpen()) return;
         HideChrome();
         Cursor = Cursors.None;
     }
@@ -447,14 +423,40 @@ public partial class MainWindow
             return;
         }
 
+        // The palette answers from anywhere, a text field included: it is how people look for
+        // a command they cannot find, and that is not the moment to be told to click elsewhere.
+        if (ctrl && !shift && e.Key == Key.K)
+        {
+            ShowPalette();
+            e.Handled = true;
+            return;
+        }
+
+        if (ctrl && !shift && e.Key == Key.F && SettingsPanel.Visibility == Visibility.Visible)
+        {
+            SettingsSearchBox.Focus();
+            SettingsSearchBox.SelectAll();
+            e.Handled = true;
+            return;
+        }
+
+        if (HandleMarkupKey(e))
+        {
+            e.Handled = true;
+            return;
+        }
+
         if (inTextEntry || !ctrl) return;
 
         var handled = true;
         switch (e.Key)
         {
             case Key.S when !shift: SaveSnapshot(); break;
+            case Key.E when !shift: ToggleMarkup(); break;
             case Key.C when shift: CopySnapshot(); break;
+            case Key.M when shift: ToggleMiniPlayer(); break;
             case Key.M: MuteButton.IsChecked = MuteButton.IsChecked != true; break;
+            case Key.G: CapturesButton.IsChecked = CapturesButton.IsChecked != true; break;
             case Key.R when shift: RotateBy(90); break;
             case Key.R when RecordButton.IsEnabled: RecordButton.IsChecked = RecordButton.IsChecked != true; break;
             case Key.I: ToggleStats(); break;
@@ -477,12 +479,53 @@ public partial class MainWindow
         e.Handled = handled;
     }
 
-    /// <summary>Escape peels back one layer at a time: help, then settings, then fullscreen,
-    /// then zoom, then the log.</summary>
+    /// <summary>
+    /// Space pauses the picture, as it does in every video player. Taken in the preview pass,
+    /// so a toolbar button that kept focus after being clicked does not swallow the key and
+    /// press itself a second time; Enter still activates a focused button.
+    /// </summary>
+    private void OnPreviewKeyDown(object sender, KeyEventArgs e)
+    {
+        // The viewer's keys come first: nothing under it should also act on them.
+        if (HandleViewerKey(e))
+        {
+            e.Handled = true;
+            return;
+        }
+
+        if (e.Key != Key.Space || Keyboard.Modifiers != ModifierKeys.None) return;
+        if (VideoHost.Visibility != Visibility.Visible || IsPanelOpen()) return;
+        if (Keyboard.FocusedElement is TextBoxBase or ComboBox or ComboBoxItem or ListBoxItem or MenuItem) return;
+
+        TogglePause();
+        e.Handled = true;
+    }
+
+    /// <summary>True while something covers the picture that the keyboard belongs to.</summary>
+    private bool IsPanelOpen() =>
+        PaletteOverlay.Visibility == Visibility.Visible
+        || SettingsPanel.Visibility == Visibility.Visible
+        || CapturesPanel.Visibility == Visibility.Visible
+        || HelpPanel.Visibility == Visibility.Visible
+        || ViewerPanel.Visibility == Visibility.Visible
+        || DoctorPanel.Visibility == Visibility.Visible
+        || WelcomeOverlay.Visibility == Visibility.Visible;
+
+    /// <summary>Escape peels back one layer at a time: the palette, the welcome sheet, help, the
+    /// viewer, the connection check, captures, settings, markup, the mini player, fullscreen, zoom,
+    /// and last the log.</summary>
     private bool HandleEscape()
     {
+        if (PaletteOverlay.Visibility == Visibility.Visible) { ClosePalette(); return true; }
+        if (IsWelcomeOpen) { CloseWelcome(); return true; }
         if (HelpPanel.Visibility == Visibility.Visible) { CloseHelp(); return true; }
+        if (IsViewerOpen) { CloseViewer(); return true; }
+        if (IsDoctorOpen) { CloseDoctor(); return true; }
+        if (CapturesPanel.Visibility == Visibility.Visible) { CapturesButton.IsChecked = false; return true; }
         if (SettingsPanel.Visibility == Visibility.Visible) { SettingsButton.IsChecked = false; return true; }
+        if (MarkupColorButton.IsChecked == true) { MarkupColorButton.IsChecked = false; return true; }
+        if (IsMarkupActive) { MarkupButton.IsChecked = false; return true; }
+        if (_isMiniPlayer) { ExitMiniPlayer(); return true; }
         if (_isFullscreen) { ToggleFullscreen(); return true; }
         if (IsZoomed) { ResetZoom(); return true; }
         if (LogPanel.Visibility == Visibility.Visible) { LogButton.IsChecked = false; return true; }
@@ -500,6 +543,7 @@ public partial class MainWindow
         if (HelpPanel.Visibility == Visibility.Visible) CloseHelp();
         else
         {
+            if (_isMiniPlayer) ExitMiniPlayer();
             HelpPanel.Visibility = Visibility.Visible;
             FadeContentIn(HelpPanel);
         }
@@ -509,10 +553,16 @@ public partial class MainWindow
 
     private static readonly (string Keys, string Action)[] Shortcuts =
     [
+        ("Ctrl+K", "Find any command"),
         ("F11", "Fullscreen; Esc leaves"),
+        ("Ctrl+Shift+M", "Mini player; double-click returns"),
+        ("Space", "Pause or resume the picture"),
         ("Ctrl+S", "Save a screenshot"),
         ("Ctrl+Shift+C", "Copy a screenshot to the clipboard"),
         ("Ctrl+R", "Start or stop recording"),
+        ("Ctrl+E", "Markup: draw over the picture"),
+        ("Ctrl+Z", "Undo the last stroke, while marking up"),
+        ("Ctrl+G", "Captures"),
         ("Ctrl+M", "Mute the phone's audio"),
         ("Ctrl+↑ / ↓", "Volume up and down"),
         ("Ctrl+D", "Disconnect the iPhone"),
@@ -524,6 +574,7 @@ public partial class MainWindow
         ("Ctrl+T", "Keep the window on top"),
         ("Ctrl+L", "Activity log"),
         ("Ctrl+,", "Settings"),
+        ("Ctrl+Alt+Shift+S", "Screenshot from any app, once switched on"),
         ("F1", "This list"),
     ];
 
@@ -532,7 +583,7 @@ public partial class MainWindow
         foreach (var (keys, action) in Shortcuts)
         {
             var row = new Grid { Margin = new Thickness(0, 5, 0, 5) };
-            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(150) });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(176) });
             row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
 
             var caps = new StackPanel { Orientation = Orientation.Horizontal, VerticalAlignment = VerticalAlignment.Center };

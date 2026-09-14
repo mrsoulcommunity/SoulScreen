@@ -65,11 +65,13 @@ internal static class WindowFrame
     /// Snap and the system menu all keep working because the frame is still a normal
     /// window - only the caption is drawn by us.
     /// </summary>
-    public static void UseCustomCaption(Window window)
+    /// <param name="captionHeight">Height of the draggable strip; zero for a window, like the
+    /// mini player, that is moved by dragging its content instead.</param>
+    public static void UseCustomCaption(Window window, double captionHeight = CaptionHeight)
     {
         Shell.WindowChrome.SetWindowChrome(window, new Shell.WindowChrome
         {
-            CaptionHeight = CaptionHeight,
+            CaptionHeight = captionHeight,
             ResizeBorderThickness = new Thickness(ResizeBorder),
             // Zero glass and no corner radius keep the frame flush with our own background.
             GlassFrameThickness = new Thickness(0),
@@ -80,6 +82,55 @@ internal static class WindowFrame
 
     public static void RemoveCustomCaption(Window window) =>
         Shell.WindowChrome.SetWindowChrome(window, null);
+
+    private const uint MonitorDefaultToNearest = 2;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct NativeRect
+    {
+        public int Left, Top, Right, Bottom;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct MonitorInfo
+    {
+        public int Size;
+        public NativeRect Monitor;
+        public NativeRect Work;
+        public uint Flags;
+    }
+
+    [DllImport("user32.dll")]
+    private static extern IntPtr MonitorFromWindow(IntPtr hwnd, uint flags);
+
+    [DllImport("user32.dll")]
+    private static extern bool GetMonitorInfo(IntPtr monitor, ref MonitorInfo info);
+
+    /// <summary>
+    /// The work area - the screen less the taskbar - of the monitor the window is on, in
+    /// device-independent pixels. <see cref="SystemParameters.WorkArea"/> only ever describes
+    /// the primary monitor, which is the wrong one for a window on a second screen.
+    /// </summary>
+    public static Rect WorkArea(Window window)
+    {
+        var handle = new WindowInteropHelper(window).Handle;
+        if (handle != IntPtr.Zero)
+        {
+            var monitor = MonitorFromWindow(handle, MonitorDefaultToNearest);
+            var info = new MonitorInfo { Size = Marshal.SizeOf<MonitorInfo>() };
+            if (monitor != IntPtr.Zero && GetMonitorInfo(monitor, ref info))
+            {
+                var dpi = VisualTreeHelper.GetDpi(window);
+                return new Rect(
+                    info.Work.Left / dpi.DpiScaleX,
+                    info.Work.Top / dpi.DpiScaleY,
+                    (info.Work.Right - info.Work.Left) / dpi.DpiScaleX,
+                    (info.Work.Bottom - info.Work.Top) / dpi.DpiScaleY);
+            }
+        }
+
+        return SystemParameters.WorkArea;
+    }
 
     /// <summary>
     /// A maximised window with a custom chrome extends its resize border past the screen

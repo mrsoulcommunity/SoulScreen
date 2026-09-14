@@ -7,6 +7,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
+using SoulScreen.App.Logic;
 
 namespace SoulScreen.App;
 
@@ -34,6 +35,8 @@ public partial class MainWindow
         VideoHost.MouseMove += OnVideoMouseMove;
         VideoHost.MouseWheel += OnVideoWheel;
         VideoHost.SizeChanged += (_, _) => ClampPan();
+        Video.SizeChanged += (_, _) => UpdatePictureCorners();
+        VideoViewport.SizeChanged += (_, _) => UpdatePictureCorners();
         DpiChanged += (_, _) => ApplyPictureSettings();
     }
 
@@ -63,6 +66,8 @@ public partial class MainWindow
 
         ClampPan();
         UpdateAspectLock();
+        // Once the new fit has been laid out: the corners follow where the picture lands.
+        Dispatcher.BeginInvoke(UpdatePictureCorners, System.Windows.Threading.DispatcherPriority.Loaded);
     }
 
     private void SetVideoFit(VideoFit fit)
@@ -72,6 +77,7 @@ public partial class MainWindow
         _settings.Save();
         ApplyPictureSettings();
         SyncPictureControls();
+        ResetMarkupForNewPicture();
         ShowToast(fit switch
         {
             VideoFit.Fill => "Fill the window",
@@ -89,6 +95,7 @@ public partial class MainWindow
         _settings.Save();
         ApplyPictureSettings();
         SyncPictureControls();
+        ResetMarkupForNewPicture();
         // The window was shaped for the other orientation; let it be reshaped once.
         _adjustedForVideoSize = false;
         if (Video.VideoSize.Width > 0) OnVideoSizeChanged(this, Video.VideoSize);
@@ -103,6 +110,7 @@ public partial class MainWindow
         _settings.Save();
         ApplyPictureSettings();
         SyncPictureControls();
+        ResetMarkupForNewPicture();
     }
 
     /// <summary>The picture's size as shown, with rotation applied.</summary>
@@ -110,6 +118,56 @@ public partial class MainWindow
     {
         var size = Video.VideoSize;
         return _settings.Rotation is 90 or 270 ? new Size(size.Height, size.Width) : size;
+    }
+
+    /// <summary>
+    /// Paints the phone's rounded screen corners over the picture in the window. Not in
+    /// fullscreen, where the picture meets the screen's own edges, nor in the mini player, whose
+    /// window Windows already rounds.
+    /// </summary>
+    private void UpdatePictureCorners()
+    {
+        if (PictureCorners is null) return;
+
+        var wanted = _settings.RoundedCorners && !_isFullscreen && !_isMiniPlayer
+                     && VideoHost.Visibility == Visibility.Visible && Video.VideoSize.Width > 0;
+        var picture = wanted ? PictureRect() : Rect.Empty;
+        if (!wanted || picture.IsEmpty || picture.Width < 8 || picture.Height < 8)
+        {
+            if (PictureCorners.Visibility != Visibility.Collapsed) PictureCorners.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        // A phone's screen corners are about a ninth of its width; anything squarer - an iPad,
+        // or a phone's picture letterboxed to a landscape stream - gets a gentler curve.
+        var shortSide = Math.Min(picture.Width, picture.Height);
+        var aspect = picture.Width / picture.Height;
+        var phoneShaped = aspect < 0.62 || aspect > 1 / 0.62;
+        var radius = Math.Round(shortSide * (phoneShaped ? 0.11 : 0.035), 1);
+
+        // A pixel larger than the picture all round, so the outer edge's anti-aliasing falls on
+        // the letterbox rather than darkening the picture's own edge.
+        var margin = new Thickness(picture.X - 1, picture.Y - 1, 0, 0);
+        var width = picture.Width + 2;
+        var height = picture.Height + 2;
+        if (PictureCorners.Visibility == Visibility.Visible && PictureCorners.Margin == margin
+            && PictureCorners.Width == width && PictureCorners.Height == height
+            && PictureCorners.Tag is double shown && shown == radius)
+        {
+            return;
+        }
+
+        var corners = new CombinedGeometry(GeometryCombineMode.Exclude,
+            new RectangleGeometry(new Rect(0, 0, width, height)),
+            new RectangleGeometry(new Rect(1, 1, picture.Width, picture.Height), radius, radius));
+        corners.Freeze();
+
+        PictureCorners.Data = corners;
+        PictureCorners.Margin = margin;
+        PictureCorners.Width = width;
+        PictureCorners.Height = height;
+        PictureCorners.Tag = radius;
+        PictureCorners.Visibility = Visibility.Visible;
     }
 
     /// <summary>
@@ -124,6 +182,15 @@ public partial class MainWindow
     private void OnVideoSizeChanged(object? sender, Size size)
     {
         UpdateAspectLock();
+        // The phone turned, or a new session began: a drawing on the old picture means nothing now.
+        ResetMarkupForNewPicture();
+
+        if (_isMiniPlayer)
+        {
+            // The phone turned while the player was open: reshape it where it stands.
+            if (size.Width > 0 && size.Height > 0) PlaceMiniPlayer(keepCurrentPlacement: true);
+            return;
+        }
 
         // Never fight the user's own sizing after the first fit.
         if (_adjustedForVideoSize || _isFullscreen || WindowState != WindowState.Normal) return;
@@ -133,7 +200,9 @@ public partial class MainWindow
 
         size = RotatedVideoSize();
 
-        var workArea = SystemParameters.WorkArea;
+        // The monitor the window is on, not the primary one: sized against the primary, a window
+        // on a second screen was thrown back onto the first by the nudge below.
+        var workArea = WindowFrame.WorkArea(this);
         var chromeHeight = Toolbar.ActualHeight + StatusBar.ActualHeight;
         // Border and caption sit outside the client area the layout measured.
         var borderWidth = Math.Max(ActualWidth - VideoHost.ActualWidth, 0);
@@ -272,7 +341,7 @@ public partial class MainWindow
             ZoomBy(e.Delta > 0 ? 1.15 : 1 / 1.15, e.GetPosition(VideoViewport));
             e.Handled = true;
         }
-        else if (_audio is not null && VolumeSlider.Visibility == Visibility.Visible)
+        else if (_audio is not null)
         {
             NudgeVolume(e.Delta > 0 ? 0.05 : -0.05);
             e.Handled = true;
@@ -283,6 +352,10 @@ public partial class MainWindow
     /// a single press on a zoomed picture starts a drag.</summary>
     private void OnVideoMouseDown(object sender, MouseButtonEventArgs e)
     {
+        // The pen has the pointer while marking up.
+        if (IsMarkupActive) return;
+        if (HandleMiniPlayerMouseDown(e)) return;
+
         if (e.ClickCount == 2)
         {
             ToggleFullscreen();
@@ -340,7 +413,11 @@ public partial class MainWindow
         MenuMute.IsEnabled = _audio is not null;
         MenuMute.IsChecked = MuteButton.IsChecked == true;
         MenuStats.IsChecked = StatsHud.Visibility == Visibility.Visible;
-        MenuPin.IsChecked = Topmost;
+        MenuPin.IsChecked = PinButton.IsChecked == true;
+        MenuFullscreen.Header = _isFullscreen ? "Leave fullscreen" : "Fullscreen";
+        MenuMini.Header = _isMiniPlayer ? "Leave the mini player" : "Mini player";
+        MenuPause.Header = Video.IsFrozen ? "Resume picture" : "Pause picture";
+        MenuMarkup.Header = IsMarkupActive ? "Leave markup" : "Markup";
     }
 
     private void OnMenuFit(object sender, RoutedEventArgs e)
@@ -371,7 +448,6 @@ public partial class MainWindow
     private void OnRecordChanged(object sender, RoutedEventArgs e)
     {
         var recording = RecordButton.IsChecked == true;
-        RecordDot.SetResourceReference(System.Windows.Shapes.Shape.FillProperty, recording ? "Danger" : "TextSecondary");
         SetRecordDotPulsing(recording);
 
         if (_pipeline is null)
@@ -394,7 +470,16 @@ public partial class MainWindow
                 return;
             }
 
-            var path = Path.Combine(_settings.CaptureDirectory, $"SoulScreen-{DateTime.Now:yyyyMMdd-HHmmss}.mp4");
+            // A drive that fills mid-recording leaves an MP4 with no index, which nothing can open.
+            if (DiskSpace.Classify(FreeBytesFor(_settings.CaptureDirectory)) == DiskSpaceLevel.Critical)
+            {
+                ShowToast("The capture drive is almost full - free some space to record", "\uE7BA");
+                RecordButton.IsChecked = false;
+                return;
+            }
+
+            _diskLowWarned = false;
+            var path = CaptureNaming.NewPath(_settings.CaptureDirectory, DateTime.Now, ".mp4");
             _pipeline.RecordAudio = _settings.RecordAudio && _audio is not null;
             _pipeline.StartRecording(path);
             RecordButton.ToolTip = "Stop recording (Ctrl+R)";
@@ -406,33 +491,68 @@ public partial class MainWindow
             RecordButton.ToolTip = "Record to MP4 (Ctrl+R)";
             _pipeline.StopRecording();
         }
+
+        UpdateRecordingPill();
+        UpdateTaskbar();
     }
 
+    /// <summary>The toolbar's dot and the badge over the picture pulse together while recording.</summary>
     private void SetRecordDotPulsing(bool pulsing)
     {
-        if (pulsing)
+        foreach (var dot in new UIElement[] { RecordDot, RecordingPillDot })
         {
-            RecordDot.BeginAnimation(OpacityProperty, new DoubleAnimation(1, 0.3, TimeSpan.FromMilliseconds(650))
+            if (pulsing)
             {
-                AutoReverse = true,
-                RepeatBehavior = RepeatBehavior.Forever,
-                EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
-            });
-        }
-        else
-        {
-            RecordDot.BeginAnimation(OpacityProperty, null);
-            RecordDot.Opacity = 1;
+                dot.BeginAnimation(OpacityProperty, new DoubleAnimation(1, 0.3, TimeSpan.FromMilliseconds(650))
+                {
+                    AutoReverse = true,
+                    RepeatBehavior = RepeatBehavior.Forever,
+                    EasingFunction = new SineEase { EasingMode = EasingMode.EaseInOut },
+                });
+            }
+            else
+            {
+                dot.BeginAnimation(OpacityProperty, null);
+                dot.Opacity = 1;
+            }
         }
     }
+
+    /// <summary>The recording badge over the picture: how long it has been going, and a way to
+    /// stop it that is there even when the toolbar has been put away.</summary>
+    private void UpdateRecordingPill()
+    {
+        var pipeline = _pipeline;
+        if (pipeline is not { IsRecording: true } || VideoHost.Visibility != Visibility.Visible)
+        {
+            RecordingPill.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        RecordingPill.Visibility = Visibility.Visible;
+        if (pipeline.RecordingPath is null)
+        {
+            // Recording begins on the next keyframe, which can be a moment away.
+            RecordingPillText.Text = "Starting…";
+            return;
+        }
+
+        var elapsed = pipeline.RecordingDuration;
+        RecordingPillText.Text = elapsed.TotalHours >= 1
+            ? $"{(int)elapsed.TotalHours}:{elapsed.Minutes:00}:{elapsed.Seconds:00}"
+            : $"{elapsed.Minutes:00}:{elapsed.Seconds:00}";
+    }
+
+    private void OnRecordingPillClick(object sender, RoutedEventArgs e) => RecordButton.IsChecked = false;
 
     private void OnRecordingFinished(object? sender, string path) =>
         Dispatcher.BeginInvoke(() =>
         {
             RecordButton.IsChecked = false;
             ShowTransientStatus($"Saved {Path.GetFileName(path)}", path);
-            ShowToast("Recording saved", "");
+            ShowToast("Recording saved", "\uE714", "View", ShowCaptures);
             _log.Info($"recording saved to {path}");
+            RefreshCapturesIfOpen();
         });
 
     // ------------------------------------------------------------------ audio
@@ -442,9 +562,11 @@ public partial class MainWindow
         var muted = MuteButton.IsChecked == true;
         MuteButton.Content = muted ? "" : "";
         MuteButton.ToolTip = muted ? "Unmute the phone's audio (Ctrl+M)" : "Mute the phone's audio (Ctrl+M)";
-        if (_audio is not null) _audio.Muted = muted;
+        ApplyAudioMute();
         // Muted reads as zero on the level, not as the level being forgotten.
         UpdateVolumeLabel();
+        UpdateMiniControls();
+        UpdateTaskbar();
 
         // Mute and level are both properties of this stream, not of the PC's mixer, and
         // both are the kind of thing people expect to survive a restart.
@@ -459,10 +581,10 @@ public partial class MainWindow
     private void OnVolumeChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
     {
         // The XAML's own Value raises this while InitializeComponent is still building the
-        // window: the label showing the percentage is declared after the slider and does
-        // not exist yet. Nothing needs doing - the first real synchronisation with the
-        // persisted level happens in ShowVideo once the pipeline exists.
-        if (VolumeLabel is null || _suppressVolumeEvents) return;
+        // window, before the settings are there to write to. Nothing needs doing - the first
+        // real synchronisation with the persisted level happens in ShowVideo once the pipeline
+        // exists.
+        if (_settings is null || !IsInitialized || _suppressVolumeEvents) return;
 
         var volume = e.NewValue;
         // Keyboard arrows can walk a double slightly past an endpoint; a NaN from a
@@ -481,23 +603,26 @@ public partial class MainWindow
 
     private void NudgeVolume(double delta)
     {
-        if (VolumeSlider.Visibility != Visibility.Visible) return;
+        // The slider may have given up its place on a narrow control bar; the level it holds is
+        // still the one in force.
+        if (_audio is null) return;
         VolumeSlider.Value = Math.Clamp(Math.Round((VolumeSlider.Value + delta) * 20) / 20, 0, 1);
         if (MuteButton.IsChecked == true && delta > 0) MuteButton.IsChecked = false;
         ShowToast($"Volume {(int)Math.Round(VolumeSlider.Value * 100)}%", "");
     }
 
-    /// <summary>The percentage beside the slider: with a 72-pixel track, "35%" is a more
-    /// readable level than a thumb position. Mute reads as zero.</summary>
+    /// <summary>The level in words, on the slider's tooltip and for a screen reader: on a short
+    /// track, "35%" is more readable than a thumb position. Mute reads as zero.</summary>
     private void UpdateVolumeLabel()
     {
-        // Same mid-construction guard as OnVolumeChanged: callers can run while the
-        // window is still half-built.
-        if (VolumeLabel is null) return;
+        // Callers can run while the window is still half-built.
+        if (VolumeSlider is null || MuteButton is null) return;
 
         var muted = MuteButton.IsChecked == true;
         var percent = (int)Math.Round((muted ? 0 : VolumeSlider.Value) * 100);
-        VolumeLabel.Text = $"{percent}%";
+        var text = muted ? "Volume: muted" : $"Volume: {percent}%";
+        VolumeSlider.ToolTip = text;
+        System.Windows.Automation.AutomationProperties.SetHelpText(VolumeSlider, text);
     }
 
     // ------------------------------------------------------------- screenshots
@@ -510,46 +635,61 @@ public partial class MainWindow
     /// the first frame. Screenshots follow the display, not the wire.</summary>
     private BitmapSource? CaptureFrame()
     {
+        // Only what is on screen: a phone still waiting to be allowed is not captured, nor one
+        // being turned away - including a phone that took over from one already on screen.
+        if (VideoHost.Visibility != Visibility.Visible || _approvalPending || _sessionRejected) return null;
+
         var raw = Video.Snapshot();
         if (raw is null) return null;
-        if (_settings.Rotation == 0 && !_settings.MirrorHorizontally) return raw;
+        if (_settings.Rotation == 0 && !_settings.MirrorHorizontally) return ComposeMarkup(raw);
 
         var group = new TransformGroup();
         if (_settings.MirrorHorizontally) group.Children.Add(new ScaleTransform(-1, 1));
         if (_settings.Rotation != 0) group.Children.Add(new RotateTransform(_settings.Rotation));
         var transformed = new TransformedBitmap(raw, group);
         transformed.Freeze();
-        return transformed;
+        return ComposeMarkup(transformed);
     }
 
-    private void SaveSnapshot()
+    /// <returns>True if a screenshot was written.</returns>
+    private bool SaveSnapshot()
     {
         var snapshot = CaptureFrame();
         if (snapshot is null)
         {
             ShowToast("Nothing to capture yet", "");
-            return;
+            return false;
         }
 
         try
         {
             Directory.CreateDirectory(_settings.CaptureDirectory);
-            var path = Path.Combine(_settings.CaptureDirectory, $"SoulScreen-{DateTime.Now:yyyyMMdd-HHmmss}.png");
+            var jpeg = _settings.ScreenshotFormat == ScreenshotFormat.Jpeg;
+            var path = CaptureNaming.NewPath(_settings.CaptureDirectory, DateTime.Now, jpeg ? ".jpg" : ".png");
 
-            var encoder = new PngBitmapEncoder();
-            encoder.Frames.Add(BitmapFrame.Create(snapshot));
-            using (var stream = File.Create(path)) encoder.Save(stream);
-
-            if (_settings.CopyScreenshotToClipboard) TrySetClipboardImage(snapshot);
+            BitmapEncoder encoder = jpeg ? new JpegBitmapEncoder { QualityLevel = 92 } : new PngBitmapEncoder();
+            // JPEG has no fourth channel to carry, and the encoder is given exactly what it takes.
+            BitmapSource frame = jpeg ? new FormatConvertedBitmap(snapshot, PixelFormats.Bgr24, null, 0) : snapshot;
+            encoder.Frames.Add(BitmapFrame.Create(frame));
+            // CreateNew rather than Create: the name was picked because it was free, and should
+            // anything have taken it since, failing is better than overwriting it.
+            using (var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write)) encoder.Save(stream);
 
             _log.Info($"saved {path}");
             Flash();
             ShowTransientStatus($"Saved {Path.GetFileName(path)}", path);
+            ShowToast("Screenshot saved", "", "View", ShowCaptures);
+            RefreshCapturesIfOpen();
+
+            // After the toast, so a clipboard that is busy is what the user is told about.
+            if (_settings.CopyScreenshotToClipboard) TrySetClipboardImage(snapshot);
+            return true;
         }
         catch (Exception ex)
         {
             _log.Error("could not save the screenshot", ex);
             ShowToast("The screenshot could not be saved", "");
+            return false;
         }
     }
 
@@ -648,8 +788,35 @@ public partial class MainWindow
 
     private void ApplyStatsVisibility()
     {
-        var shown = _settings.ShowStats && VideoHost.Visibility == Visibility.Visible;
+        var shown = _settings.ShowStats && VideoHost.Visibility == Visibility.Visible && !_isMiniPlayer;
         StatsHud.Visibility = shown ? Visibility.Visible : Visibility.Collapsed;
         if (shown) UpdateMetrics();
+    }
+
+    // ------------------------------------------------------------------- pause
+
+    private void OnMenuPause(object sender, RoutedEventArgs e) => TogglePause();
+
+    private void OnPausedPillClick(object sender, RoutedEventArgs e) => SetPaused(false);
+
+    private void TogglePause() => SetPaused(!Video.IsFrozen);
+
+    /// <summary>
+    /// Holds the picture still while the phone carries on - to point at something during a
+    /// presentation, or read a message before it scrolls away. Sound, recording and the
+    /// connection are all left running; only what is drawn stops.
+    /// </summary>
+    private void SetPaused(bool paused, bool announce = true)
+    {
+        if (paused && VideoHost.Visibility != Visibility.Visible) return;
+
+        var changed = Video.IsFrozen != paused;
+        Video.IsFrozen = paused;
+        PausedPill.Visibility = paused ? Visibility.Visible : Visibility.Collapsed;
+        UpdateMiniControls();
+        UpdatePauseButton();
+
+        if (changed && announce)
+            ShowToast(paused ? "Picture paused - the phone is still connected" : "Picture resumed", paused ? "" : "");
     }
 }

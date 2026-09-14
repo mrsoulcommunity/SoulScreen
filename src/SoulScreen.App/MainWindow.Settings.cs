@@ -41,16 +41,28 @@ public partial class MainWindow
     {
         if (SettingsButton.IsChecked == true)
         {
+            if (_isMiniPlayer) ExitMiniPlayer();
             CloseHelp();
+            CapturesButton.IsChecked = false;
             PopulateSettingsForm();
             RefreshIdentity();
             RefreshRecentList();
+
+            // Every visit starts from the whole list, at the top.
+            if (SettingsSearchBox.Text.Length > 0) SettingsSearchBox.Text = string.Empty;
+            else ApplySettingsSearch();
+
             SettingsPanel.Visibility = Visibility.Visible;
             FadeContentIn(SettingsPanel);
+            // Once the panel has a width to decide the layout by.
+            Dispatcher.BeginInvoke(UpdateSettingsLayout, System.Windows.Threading.DispatcherPriority.Loaded);
         }
         else
         {
+            var hadFocus = SettingsPanel.IsKeyboardFocusWithin;
             SettingsPanel.Visibility = Visibility.Collapsed;
+            // Focus left in a hidden field would swallow the next shortcut.
+            if (hadFocus) Focus();
         }
     }
 
@@ -74,6 +86,7 @@ public partial class MainWindow
             ThemeSystem.IsChecked = _settings.Theme == AppTheme.System;
             ThemeDark.IsChecked = _settings.Theme == AppTheme.Dark;
             ThemeLight.IsChecked = _settings.Theme == AppTheme.Light;
+            SyncAccentSwatches();
 
             SyncPictureControls();
             LatencySmooth.IsChecked = _settings.Latency == LatencyMode.Smooth;
@@ -83,17 +96,29 @@ public partial class MainWindow
             LockAspectCheck.IsChecked = _settings.LockAspectRatio;
             KeepAwakeCheck.IsChecked = _settings.KeepDisplayAwake;
             StatsCheck.IsChecked = _settings.ShowStats;
+            RoundedCornersCheck.IsChecked = _settings.RoundedCorners;
 
             PopulateAudioDevices();
 
             CaptureFolderBox.Text = _settings.CaptureDirectory;
             RecordAudioCheck.IsChecked = _settings.RecordAudio;
             ClipboardCheck.IsChecked = _settings.CopyScreenshotToClipboard;
+            FormatPng.IsChecked = _settings.ScreenshotFormat == ScreenshotFormat.Png;
+            FormatJpeg.IsChecked = _settings.ScreenshotFormat == ScreenshotFormat.Jpeg;
+
+            BringToFrontCheck.IsChecked = _settings.BringToFrontOnConnect;
+            FullscreenOnConnectCheck.IsChecked = _settings.FullscreenOnConnect;
+            RecordOnConnectCheck.IsChecked = _settings.RecordOnConnect;
+            LeaveFullscreenCheck.IsChecked = _settings.LeaveFullscreenOnDisconnect;
+
+            AskBeforeMirroringCheck.IsChecked = _settings.AskBeforeMirroring;
+            RefreshDeviceRuleLists();
 
             OnTopCheck.IsChecked = _settings.AlwaysOnTop;
             MinimizeToTrayCheck.IsChecked = _settings.MinimizeToTray;
             CloseToTrayCheck.IsChecked = _settings.CloseToTray;
             TrayNotifyCheck.IsChecked = _settings.TrayNotifications;
+            GlobalHotkeysCheck.IsChecked = _settings.GlobalHotkeys;
             // The registry is the truth for this one: Settings > Apps > Startup can change it
             // behind our back, and the switch should show what will actually happen.
             StartupCheck.IsChecked = StartupRegistration.IsEnabled();
@@ -170,6 +195,10 @@ public partial class MainWindow
         _settings.MinimizeToTray = MinimizeToTrayCheck.IsChecked == true;
         _settings.CloseToTray = CloseToTrayCheck.IsChecked == true;
         _settings.TrayNotifications = TrayNotifyCheck.IsChecked == true;
+        _settings.BringToFrontOnConnect = BringToFrontCheck.IsChecked == true;
+        _settings.FullscreenOnConnect = FullscreenOnConnectCheck.IsChecked == true;
+        _settings.RecordOnConnect = RecordOnConnectCheck.IsChecked == true;
+        _settings.LeaveFullscreenOnDisconnect = LeaveFullscreenCheck.IsChecked == true;
         _settings.Save();
 
         // Tracing takes effect straight away; only something the receiver itself depends
@@ -194,7 +223,7 @@ public partial class MainWindow
         if (_settings.Theme == theme) return;
         _settings.Theme = theme;
         _settings.Save();
-        ThemeManager.Apply(theme, animate: true);
+        ThemeManager.Apply(theme, _settings.Accent, animate: true);
     }
 
     private void OnFitChanged(object sender, RoutedEventArgs e)
@@ -218,6 +247,47 @@ public partial class MainWindow
         SetMirror(MirrorCheck.IsChecked == true);
     }
 
+    private void OnRoundedCornersChanged(object sender, RoutedEventArgs e)
+    {
+        if (_populatingSettings) return;
+        SetRoundedCorners(RoundedCornersCheck.IsChecked == true);
+    }
+
+    private void SetRoundedCorners(bool rounded)
+    {
+        if (_settings.RoundedCorners == rounded) return;
+        _settings.RoundedCorners = rounded;
+        _settings.Save();
+        SyncCheck(RoundedCornersCheck, rounded);
+        UpdatePictureCorners();
+    }
+
+    private void SetAskBeforeMirroring(bool ask)
+    {
+        if (_settings.AskBeforeMirroring == ask) return;
+        _settings.AskBeforeMirroring = ask;
+        _settings.Save();
+        SyncCheck(AskBeforeMirroringCheck, ask);
+        ShowToast(ask ? "New iPhones will ask before mirroring" : "iPhones mirror without asking", "\uEA18");
+    }
+
+    private void SetGlobalHotkeys(bool enabled)
+    {
+        if (_settings.GlobalHotkeys == enabled) return;
+        _settings.GlobalHotkeys = enabled;
+        _settings.Save();
+        SyncCheck(GlobalHotkeysCheck, enabled);
+        ApplyGlobalHotkeys(announce: true);
+    }
+
+    /// <summary>Moves a switch to match a setting changed elsewhere, without it reading as an edit.</summary>
+    private void SyncCheck(CheckBox box, bool value)
+    {
+        _populatingSettings = true;
+        try { box.IsChecked = value; }
+        finally { _populatingSettings = false; }
+    }
+
     private void OnLatencyChanged(object sender, RoutedEventArgs e)
     {
         if (_populatingSettings) return;
@@ -230,6 +300,15 @@ public partial class MainWindow
         ApplyPictureSettings();
         var delay = AppSettings.PresentationDelayFor(mode);
         ShowToast($"Holding {delay.TotalMilliseconds:0} ms of picture", "");
+    }
+
+    private void OnScreenshotFormatChanged(object sender, RoutedEventArgs e)
+    {
+        if (_populatingSettings) return;
+        var format = FormatJpeg.IsChecked == true ? ScreenshotFormat.Jpeg : ScreenshotFormat.Png;
+        if (_settings.ScreenshotFormat == format) return;
+        _settings.ScreenshotFormat = format;
+        _settings.Save();
     }
 
     private void OnStatsSettingChanged(object sender, RoutedEventArgs e)
@@ -508,21 +587,30 @@ public partial class MainWindow
     {
         var answer = MessageBox.Show(this,
             "Every setting goes back to its default, including the receiver name and the window placement. " +
-            "The pairing identity and the history of phones are kept.\n\nReset everything?",
+            "The pairing identity, the history of phones and the allowed and blocked iPhones are kept.\n\nReset everything?",
             "Reset settings", MessageBoxButton.YesNo, MessageBoxImage.Question, MessageBoxResult.No);
         if (answer != MessageBoxResult.Yes) return;
 
         var fresh = AppSettings.Defaults();
         fresh.RecentDevices = _settings.RecentDevices;
+        // Who may mirror is a decision about people rather than a preference, and a welcome once
+        // seen stays seen.
+        fresh.AllowedDevices = _settings.AllowedDevices;
+        fresh.BlockedDevices = _settings.BlockedDevices;
+        fresh.HasSeenWelcome = true;
         fresh.Normalise();
         _settings = fresh;
         // The window is not the only holder: whatever reads App.Settings must see the reset too.
         App.Settings = fresh;
         _settings.Save();
 
-        ThemeManager.Apply(_settings.Theme, animate: true);
+        ThemeManager.Apply(_settings.Theme, _settings.Accent, animate: true);
         ApplySettingsToChrome();
         ApplyPictureSettings();
+        ApplyGlobalHotkeys(announce: false);
+        SyncMarkupChoices();
+        ApplyMarkupTool();
+        UpdatePictureCorners();
         PopulateSettingsForm();
         UpdateTray();
         ShowToast("Settings reset", "");

@@ -2,6 +2,7 @@ using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Threading;
+using SoulScreen.App.Logic;
 using SoulScreen.Core.Sources;
 
 namespace SoulScreen.App;
@@ -20,6 +21,11 @@ public partial class MainWindow
     private bool _cadenceStreakMismatched;
     private int _cadenceStreak;
     private bool _noticeDismissed;
+
+    /// <summary>When the capture drive was last looked at during a recording, and whether the
+    /// low-space warning has been given for this recording.</summary>
+    private DateTime _diskCheckedUtc;
+    private bool _diskLowWarned;
 
     /// <summary>A short-lived status line, e.g. "Saved X". Held on the status bar for a
     /// few seconds against the metrics tick that rewrites that line every half second.</summary>
@@ -64,6 +70,8 @@ public partial class MainWindow
         }
 
         UpdateSessionTimer();
+        UpdateRecordingPill();
+        CheckRecordingDiskSpace();
 
         var source = ActiveSource;
         if (source is null)
@@ -78,6 +86,8 @@ public partial class MainWindow
             MirrorSourceState.Ready when _receiver is not null =>
                 $"Advertising as \"{_receiver.AdvertisedName}\" on port {_settings.Port}",
             MirrorSourceState.Connecting => _demo is null ? "Negotiating with the phone" : "Starting the demo",
+            MirrorSourceState.Streaming when _approvalPending => $"Waiting for you to allow {source.Device?.Name ?? "the iPhone"}",
+            MirrorSourceState.Streaming when _sessionRejected => $"Disconnecting {source.Device?.Name ?? "the iPhone"}",
             MirrorSourceState.Streaming => _demo is null
                 ? source.Device?.ToString() ?? "Mirroring"
                 : "Demo pattern - the receiver is paused",
@@ -93,13 +103,15 @@ public partial class MainWindow
 
         // Figures from the session that just ended would otherwise sit on the bar while the
         // idle screen says nothing is streaming, which reads as a fault that is not there.
-        if (source.State != MirrorSourceState.Streaming)
+        // Nor while a session is being held back or turned away: it is not on screen to measure.
+        if (source.State != MirrorSourceState.Streaming || _approvalPending || _sessionRejected)
         {
             MetricsText.Text = string.Empty;
             return;
         }
 
         UpdateBitrate();
+        UpdateQuality();
 
         var parts = new List<string>(8);
         if (Video.VideoSize.Width > 0)
@@ -122,7 +134,8 @@ public partial class MainWindow
 
         var lost = _pipeline.DroppedSampleCount + _pipeline.SkippedSampleCount + Video.SupersededFrameCount;
         if (lost > 0) parts.Add($"{lost} skipped");
-        PositionStatsHud();
+        if (Video.IsFrozen) parts.Add("paused");
+        PositionOverlays();
 
         CheckCadence(_pipeline.FramesPerSecond, refresh);
         if (_audio is { IsPlaying: true })
@@ -153,11 +166,131 @@ public partial class MainWindow
         UpdateTray();
     }
 
-    /// <summary>Keeps the overlay clear of the notice bar, which shares the same corner.</summary>
-    private void PositionStatsHud()
+    /// <summary>
+    /// Keeps what floats over the picture clear of everything else up there: the notice bar
+    /// across the top and, in fullscreen, the toolbar and status bar that come and go over the
+    /// edges. Held at the same place whether those strips are showing or not, so nothing jumps
+    /// each time the pointer moves.
+    /// </summary>
+    private void PositionOverlays()
     {
-        var top = NoticeBar.Visibility == Visibility.Visible ? NoticeBar.ActualHeight + 14 : 14;
-        if (Math.Abs(StatsHud.Margin.Top - top) > 0.5) StatsHud.Margin = new Thickness(14, top, 0, 0);
+        var chromeTop = _isFullscreen ? Toolbar.Height : 0;
+        var chromeBottom = _isFullscreen ? StatusBar.ActualHeight : 0;
+
+        SetMargin(NoticeBar, new Thickness(0, chromeTop, 0, 0));
+        var top = chromeTop + (NoticeBar.Visibility == Visibility.Visible ? NoticeBar.ActualHeight : 0) + 14;
+        SetMargin(StatsHud, new Thickness(14, top, 0, 0));
+        SetMargin(PictureBadges, new Thickness(0, top, 0, 0));
+        SetMargin(ZoomBadge, new Thickness(0, top, 14, 0));
+
+        // The foot of the picture holds the control bar, or the markup bar in its place, and the
+        // activity log docks under both. Toasts rise above whichever is there - by the bar's
+        // height whether it is faded in or not, so a toast never jumps as the pointer moves.
+        var bottom = chromeBottom + (LogPanel.Visibility == Visibility.Visible ? LogPanel.ActualHeight : 0);
+        var barLift = IsMarkupActive ? 54
+            : ControlBar.Visibility == Visibility.Visible ? Math.Max(ControlBar.ActualHeight, 42) + 12
+            : 0;
+        SetMargin(ControlBar, new Thickness(12, 0, 12, 16 + bottom));
+        SetMargin(MarkupBar, new Thickness(12, 0, 12, 16 + bottom));
+        SetMargin(Toast, new Thickness(16, 0, 16, 20 + bottom + barLift));
+    }
+
+    // ------------------------------------------------------------------ quality
+
+    private readonly ConnectionQualityMeter _quality = new();
+    private ConnectionQualityLevel? _qualityShown;
+
+    /// <summary>Feeds the meter this tick's running totals and redraws the bars if the verdict moved.</summary>
+    private void UpdateQuality()
+    {
+        if (_pipeline is null || QualityIndicator.Visibility != Visibility.Visible) return;
+
+        // Frames the display had no time for are left out: they are this PC's refresh rate
+        // talking, not the network.
+        var videoLost = _pipeline.DroppedSampleCount + _pipeline.SkippedSampleCount;
+        var audioLost = _audio is { } audio ? audio.FilledGapCount + audio.DroppedPacketCount : 0;
+        ShowQuality(_quality.Sample(TimeSpan.FromTicks(Stopwatch.GetTimestamp() * TimeSpan.TicksPerSecond / Stopwatch.Frequency),
+            videoLost, audioLost));
+    }
+
+    private void ShowQuality(ConnectionQualityLevel level)
+    {
+        if (_qualityShown == level) return;
+        _qualityShown = level;
+
+        var (lit, brush) = level switch
+        {
+            ConnectionQualityLevel.Good => (3, "Success"),
+            ConnectionQualityLevel.Fair => (2, "Warning"),
+            ConnectionQualityLevel.Poor => (1, "Danger"),
+            _ => (0, "TextTertiary"),
+        };
+
+        var bars = new[] { QualityBar1, QualityBar2, QualityBar3 };
+        for (var i = 0; i < bars.Length; i++)
+        {
+            var on = i < lit;
+            bars[i].SetResourceReference(System.Windows.Shapes.Shape.FillProperty, on ? brush : "TextTertiary");
+            bars[i].Opacity = on || lit == 0 ? 1 : 0.35;
+        }
+
+        var description = ConnectionQualityMeter.Describe(level);
+        QualityIndicator.ToolTip = description;
+        System.Windows.Automation.AutomationProperties.SetHelpText(QualityIndicator, description);
+    }
+
+    /// <summary>
+    /// Every few seconds of a recording, looks at the room left on the capture drive: a warning
+    /// with the time left once it runs low, and the recording ended - while there is still room
+    /// to write its index - before it runs out.
+    /// </summary>
+    private void CheckRecordingDiskSpace()
+    {
+        if (_pipeline is not { IsRecording: true } pipeline) return;
+        if (DateTime.UtcNow - _diskCheckedUtc < TimeSpan.FromSeconds(5)) return;
+        _diskCheckedUtc = DateTime.UtcNow;
+
+        var free = FreeBytesFor(_settings.CaptureDirectory);
+        switch (DiskSpace.Classify(free))
+        {
+            case DiskSpaceLevel.Critical:
+                _log.Warn($"stopping the recording: {free} bytes left on the capture drive");
+                RecordButton.IsChecked = false;
+                ShowToast("Recording stopped - the capture drive is almost full", "\uE7BA");
+                NotifyFromTray("Recording stopped", "The drive it was saving to is almost full. The recording up to now has been kept.");
+                break;
+
+            case DiskSpaceLevel.Low when !_diskLowWarned && free is { } bytes:
+                _diskLowWarned = true;
+                var seconds = pipeline.RecordingDuration.TotalSeconds;
+                var rate = seconds > 2 ? pipeline.RecordingSizeBytes / seconds : 0;
+                ShowToast(DiskSpace.TimeLeft(bytes, rate) is { } left
+                    ? $"The capture drive is filling up - {DiskSpace.DescribeTimeLeft(left)} of recording left"
+                    : "The capture drive is filling up", "\uE7BA");
+                break;
+        }
+    }
+
+    /// <summary>Free space on the drive holding <paramref name="directory"/>, or null when it
+    /// cannot be told - a network share, or a drive that has gone.</summary>
+    private static long? FreeBytesFor(string directory)
+    {
+        try
+        {
+            var root = System.IO.Path.GetPathRoot(System.IO.Path.GetFullPath(directory));
+            if (string.IsNullOrEmpty(root) || root.StartsWith(@"\\", StringComparison.Ordinal)) return null;
+            var drive = new System.IO.DriveInfo(root);
+            return drive.IsReady ? drive.AvailableFreeSpace : null;
+        }
+        catch (Exception)
+        {
+            return null;
+        }
+    }
+
+    private static void SetMargin(FrameworkElement element, Thickness margin)
+    {
+        if (element.Margin != margin) element.Margin = margin;
     }
 
     private void UpdateSessionTimer()
@@ -282,7 +415,7 @@ public partial class MainWindow
         if (!mismatched)
         {
             NoticeBar.Visibility = Visibility.Collapsed;
-            PositionStatsHud();
+            PositionOverlays();
             return;
         }
 
@@ -293,13 +426,17 @@ public partial class MainWindow
 
         _warnings.Add(new WarningItem(title, detail, WarningKind.Cadence));
 
-        // The idle panel is hidden while streaming, which is exactly when this matters.
-        if (_noticeDismissed) return;
+        // Filled in even when it cannot be shown yet, so the mini player can put it back up
+        // with the right words when it closes.
         NoticeTitle.Text = title;
         NoticeDetail.Text = detail;
+
+        // The idle panel is hidden while streaming, which is exactly when this matters.
+        // Not in the mini player, though, which has no room for it.
+        if (_noticeDismissed || _isMiniPlayer) return;
         NoticeBar.Visibility = Visibility.Visible;
         // The overlay shares this corner, and the bar has just changed height.
-        Dispatcher.BeginInvoke(PositionStatsHud, DispatcherPriority.Loaded);
+        Dispatcher.BeginInvoke(PositionOverlays, DispatcherPriority.Loaded);
     }
 
     private void OnDismissNotice(object sender, RoutedEventArgs e)
@@ -308,7 +445,7 @@ public partial class MainWindow
         // say so again rather than stay silent about a problem the user may have forgotten.
         _noticeDismissed = true;
         NoticeBar.Visibility = Visibility.Collapsed;
-        PositionStatsHud();
+        PositionOverlays();
 
         // If the session ended and took its warning with it, the dismiss must not be what
         // pins the flag; the next tick would otherwise leave the bar down for a warning
