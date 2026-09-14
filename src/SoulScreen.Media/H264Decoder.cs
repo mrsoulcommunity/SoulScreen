@@ -58,9 +58,17 @@ public sealed unsafe class H264Decoder : IDisposable
         // several frames before releasing the first, which is exactly the latency a mirror
         // must not have; slice threading still parallelises when the sender uses slices.
         _context->flags |= ffmpeg.AV_CODEC_FLAG_LOW_DELAY;
-        _context->flags2 |= ffmpeg.AV_CODEC_FLAG2_FAST;
         _context->thread_type = ffmpeg.FF_THREAD_SLICE;
         _context->thread_count = Math.Min(Environment.ProcessorCount, 4);
+
+        // Deliberately not AV_CODEC_FLAG2_FAST. It buys a few percent by allowing
+        // interpolation that does not match the specification bit for bit, and on any
+        // ordinary video that is invisible. Mirroring is the case where it is not: the phone
+        // sends keyframes seconds apart, so every picture in between is predicted from our
+        // reconstruction rather than the phone's. Each small mismatch is carried into the
+        // next frame and the next, and by the end of a long run of inter frames the drift is
+        // plain - blocks that no longer match their surroundings, drifting green where the
+        // chroma has wandered furthest. The keyframe clears it, and it starts again.
 
         var result = ffmpeg.avcodec_open2(_context, codec, null);
         if (result < 0)

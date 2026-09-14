@@ -110,6 +110,30 @@ public class AudioDecoderTests
         Assert.Contains("codec configuration", failure.Message, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>
+    /// iOS fills quiet stretches of a mirroring session with four-byte packets, 00 68 34 00,
+    /// short enough to go out unencrypted. They are real AAC-ELD frames of silence a whole
+    /// packet long - which matters, because playback keeps its timeline by what each packet
+    /// decodes to, and a frame that decoded to nothing would read as a lost packet.
+    /// </summary>
+    [SkippableFact]
+    public void DecodesTheSilenceFramesIosSendsToAWholePacketOfSilence()
+    {
+        Skip.IfNot(FFmpegRuntime.IsAvailable, SkipReason);
+
+        using var decoder = new AudioDecoder(new AudioFormat(AudioCodec.AacEld, 44100, 2, 480, []));
+        byte[] silence = [0x00, 0x68, 0x34, 0x00];
+
+        for (var i = 0; i < 4; i++)
+        {
+            var pcm = decoder.Decode(silence);
+            Assert.Equal(480 * 2 * sizeof(short), pcm.Length);
+            Assert.True(pcm.IndexOfAnyExcept((byte)0) < 0, "a silence frame decoded to something audible");
+        }
+
+        Assert.Equal(0, decoder.ErrorCount);
+    }
+
     [SkippableFact]
     public void RejectsNoiseWithoutThrowing()
     {

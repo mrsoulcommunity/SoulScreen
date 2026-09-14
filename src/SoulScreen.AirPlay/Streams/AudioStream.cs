@@ -16,9 +16,11 @@ namespace SoulScreen.AirPlay.Streams;
 /// encrypted; any tail is sent in the clear.
 /// </para>
 /// <para>
-/// Packets can arrive out of order or not at all. Rather than build a full jitter buffer,
-/// this emits in arrival order and reports gaps, which suits mirroring - a late audio
-/// packet is worth less than a low-latency one.
+/// Every packet arrives several times over, because the receiver advertises redundant audio,
+/// and packets can also arrive out of order or not at all. <see cref="RtpSequenceFilter"/>
+/// lets each one through once, in order, and the rest are dropped before any of them is
+/// decrypted. There is no jitter buffer beyond that: a late audio packet is worth less than a
+/// low-latency one, and evening out when packets arrive is the playback side's job.
 /// </para>
 /// </summary>
 public sealed class AudioStream : IAsyncDisposable
@@ -31,15 +33,13 @@ public sealed class AudioStream : IAsyncDisposable
     private readonly Socket _dataSocket;
     private readonly Socket _controlSocket;
     private readonly string? _dumpPath;
+    private readonly RtpSequenceFilter _sequence = new();
 
     private CancellationTokenSource? _cts;
     private Task? _dataLoop;
     private Task? _controlLoop;
     private FileStream? _dumpStream;
-    private ushort _lastSequence;
-    private bool _haveSequence;
     private long _packetCount;
-    private long _lostCount;
     private bool _plausibilityChecked;
 
     public AudioStream(ReadOnlySpan<byte> aesKey, ReadOnlySpan<byte> aesIv, AudioFormat format, string? dumpDirectory = null)
@@ -66,8 +66,18 @@ public sealed class AudioStream : IAsyncDisposable
     public int DataPort { get; }
     public int ControlPort { get; }
     public AudioFormat Format { get; }
+
+    /// <summary>Packets delivered, each counted once however many copies of it arrived.</summary>
     public long PacketCount => Interlocked.Read(ref _packetCount);
-    public long LostPacketCount => Interlocked.Read(ref _lostCount);
+
+    /// <summary>Packets no copy of which ever arrived.</summary>
+    public long LostPacketCount => _sequence.LostCount;
+
+    /// <summary>Redundant copies of packets already delivered, discarded unread.</summary>
+    public long DuplicatePacketCount => _sequence.DuplicateCount;
+
+    /// <summary>Packets discarded because a newer one had already been delivered.</summary>
+    public long LatePacketCount => _sequence.LateCount;
 
     /// <summary>Raised per audio packet. The sample is recycled once the handler returns.</summary>
     public event EventHandler<MediaSample>? SampleReady;
@@ -100,10 +110,10 @@ public sealed class AudioStream : IAsyncDisposable
     private async Task ReceiveDataAsync(CancellationToken token)
     {
         var buffer = new byte[2048];
+        // Only the key is taken from the instance; the mode, IV and padding are arguments to
+        // each call below.
         using var aes = Aes.Create();
         aes.Key = _aesKey;
-        aes.Mode = CipherMode.CBC;
-        aes.Padding = PaddingMode.None;
 
         while (!token.IsCancellationRequested)
         {
@@ -127,7 +137,10 @@ public sealed class AudioStream : IAsyncDisposable
 
             var sequence = BinaryPrimitives.ReadUInt16BigEndian(buffer.AsSpan(2));
             var timestamp = BinaryPrimitives.ReadUInt32BigEndian(buffer.AsSpan(4));
-            TrackSequence(sequence);
+
+            // Decided before anything is decrypted: most of what arrives is a redundant copy of
+            // a packet that has already been delivered.
+            if (!_sequence.Accept(sequence, timestamp)) continue;
 
             var payloadLength = received - RtpHeaderSize;
             var encryptedLength = payloadLength & ~0xf;
@@ -138,13 +151,20 @@ public sealed class AudioStream : IAsyncDisposable
                 buffer.AsSpan(RtpHeaderSize, payloadLength).CopyTo(payload);
 
                 // Every packet is its own CBC message: the IV never chains between packets.
+                // Hence the one-shot call rather than a reused ICryptoTransform, which would
+                // carry the last block of one packet into the first of the next - and hence
+                // not a new transform per packet either, which put a fresh key schedule and
+                // two allocations on this thread ninety times a second.
                 if (encryptedLength > 0)
                 {
-                    using var decryptor = aes.CreateDecryptor(_aesKey, _aesIv);
-                    decryptor.TransformBlock(payload, 0, encryptedLength, payload, 0);
+                    aes.DecryptCbc(
+                        buffer.AsSpan(RtpHeaderSize, encryptedLength),
+                        _aesIv,
+                        payload.AsSpan(0, encryptedLength),
+                        PaddingMode.None);
                 }
 
-                CheckPlausibility(payload, payloadLength);
+                CheckPlausibility(payload, encryptedLength);
 
                 Interlocked.Increment(ref _packetCount);
                 _dumpStream?.Write(payload, 0, payloadLength);
@@ -200,10 +220,16 @@ public sealed class AudioStream : IAsyncDisposable
     /// away from the cause. The leading byte of an AAC-ELD or ALAC frame is one of a small
     /// known set, which is enough to tell noise from audio.
     /// </para>
+    /// <para>
+    /// Only a packet with an encrypted block in it says anything about the key. iOS fills
+    /// silence with four-byte frames - 00 68 34 00 - which are too short to encrypt and so go
+    /// out in the clear, and judging the key by one of those raised the wrong-key warning on a
+    /// stream that was decoding perfectly well.
+    /// </para>
     /// </summary>
-    private void CheckPlausibility(byte[] payload, int length)
+    private void CheckPlausibility(byte[] payload, int encryptedLength)
     {
-        if (_plausibilityChecked || length == 0) return;
+        if (_plausibilityChecked || encryptedLength == 0) return;
         _plausibilityChecked = true;
 
         // Element instance tags an AAC-ELD or ALAC frame can start with.
@@ -216,23 +242,6 @@ public sealed class AudioStream : IAsyncDisposable
 
         _log.Warn($"the first audio frame starts 0x{payload[0]:x2}, which is not an audio frame - " +
                   "the stream key is probably wrong, and nothing will decode");
-    }
-
-    private void TrackSequence(ushort sequence)
-    {
-        if (_haveSequence)
-        {
-            var expected = (ushort)(_lastSequence + 1);
-            if (sequence != expected)
-            {
-                // Wrap-safe distance; anything large is reordering rather than loss.
-                var gap = (ushort)(sequence - expected);
-                if (gap is > 0 and < 1000) Interlocked.Add(ref _lostCount, gap);
-            }
-        }
-
-        _lastSequence = sequence;
-        _haveSequence = true;
     }
 
     public async ValueTask DisposeAsync()
@@ -262,6 +271,7 @@ public sealed class AudioStream : IAsyncDisposable
         CryptographicOperations.ZeroMemory(_aesIv);
 
         if (PacketCount > 0)
-            _log.Info($"audio stream closed after {PacketCount} packets ({LostPacketCount} lost)");
+            _log.Info($"audio stream closed after {PacketCount} packets ({LostPacketCount} lost); " +
+                      $"discarded {DuplicatePacketCount} redundant copies and {LatePacketCount} late packets");
     }
 }

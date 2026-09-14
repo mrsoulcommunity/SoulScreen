@@ -87,6 +87,81 @@ public class SessionRecorderTests
         }
     }
 
+    /// <summary>
+    /// With an audio track asked for, the file carries two streams, the second AAC, and the
+    /// audio runs the length of the picture - including silence for the stretch before the
+    /// first packet and for packets that never came, so nothing drifts.
+    /// </summary>
+    [SkippableFact]
+    public void RecordsAnAudioTrackAlongsideTheVideo()
+    {
+        Skip.IfNot(CanRun, SkipReason);
+
+        const int width = 160, height = 120, frameCount = 30;
+        var accessUnits = H264EncoderHarness.EncodeSplitField(width, height, frameCount);
+        var format = FormatFrom(accessUnits[0], width, height);
+
+        var path = Path.Combine(Path.GetTempPath(), $"soulscreen-record-{Guid.NewGuid():N}.mp4");
+        try
+        {
+            using (var recorder = SessionRecorder.Create(path, format, RecordingAudioTrack.AirPlay))
+            {
+                Assert.True(recorder.HasAudio);
+
+                // Audio before the first picture is dropped: there is nothing to line it up with.
+                recorder.WriteAudio(new byte[480 * 4], timestampUs: 0);
+                Assert.Equal(0, recorder.AudioPacketCount);
+
+                // One second of picture at thirty a second, and one second of 440 Hz in
+                // AirPlay-sized packets with a 100 ms hole in the middle.
+                var tone = Tone(480, 44100, 440);
+                for (var i = 0; i < frameCount; i++)
+                {
+                    recorder.Write(accessUnits[i], timestampUs: i * 33_333L, isKeyFrame: true);
+
+                    for (var packet = 0; packet < 3; packet++)
+                    {
+                        var index = i * 3 + packet;
+                        if (index is >= 40 and < 49) continue; // lost packets
+                        recorder.WriteAudio(tone, timestampUs: index * 480L * 1_000_000 / 44100);
+                    }
+                }
+
+                Assert.Equal(frameCount, recorder.FrameCount);
+                Assert.True(recorder.AudioPacketCount > 70, $"only {recorder.AudioPacketCount} audio packets were accepted");
+            }
+
+            var probe = Mp4Probe.Read(path);
+            Assert.Equal(2, probe.StreamCount);
+            Assert.Equal(AVCodecID.AV_CODEC_ID_H264, probe.CodecId);
+            Assert.Equal(frameCount, probe.PacketCount);
+            Assert.Equal(AVCodecID.AV_CODEC_ID_AAC, probe.AudioCodecId);
+            Assert.Equal(44100, probe.AudioSampleRate);
+            Assert.True(probe.AudioExtradataLength > 0, "the audio track should carry an AudioSpecificConfig");
+            // A second of audio is about 43 packets of 1024 samples; the hole was filled with
+            // silence rather than closed up, so the count covers the whole second.
+            Assert.InRange(probe.AudioPacketCount, 40, 48);
+            Assert.InRange(probe.AudioDuration.TotalSeconds, 0.9, 1.15);
+        }
+        finally
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+    }
+
+    /// <summary>Interleaved 16-bit stereo PCM of one packet of a sine wave.</summary>
+    private static byte[] Tone(int frames, int sampleRate, double frequency)
+    {
+        var pcm = new byte[frames * 4];
+        for (var i = 0; i < frames; i++)
+        {
+            var sample = (short)(Math.Sin(2 * Math.PI * frequency * i / sampleRate) * 12000);
+            BitConverter.TryWriteBytes(pcm.AsSpan(i * 4), sample);
+            BitConverter.TryWriteBytes(pcm.AsSpan(i * 4 + 2), sample);
+        }
+        return pcm;
+    }
+
     [SkippableFact]
     public void RefusesToStartWithoutACodecConfiguration()
     {
@@ -130,7 +205,12 @@ internal static unsafe class Mp4Probe
         int Width,
         int Height,
         int ExtradataLength,
-        int PacketCount);
+        int PacketCount,
+        AVCodecID AudioCodecId = AVCodecID.AV_CODEC_ID_NONE,
+        int AudioSampleRate = 0,
+        int AudioExtradataLength = 0,
+        int AudioPacketCount = 0,
+        TimeSpan AudioDuration = default);
 
     public static Result Read(string path)
     {
@@ -149,14 +229,17 @@ internal static unsafe class Mp4Probe
 
             var stream = format->streams[0];
             var parameters = stream->codecpar;
+            var audio = format->nb_streams > 1 ? format->streams[1] : null;
 
             var packets = 0;
+            var audioPackets = 0;
             var packet = ffmpeg.av_packet_alloc();
             try
             {
                 while (ffmpeg.av_read_frame(format, packet) >= 0)
                 {
-                    packets++;
+                    if (packet->stream_index == 0) packets++;
+                    else audioPackets++;
                     ffmpeg.av_packet_unref(packet);
                 }
             }
@@ -165,13 +248,22 @@ internal static unsafe class Mp4Probe
                 ffmpeg.av_packet_free(&packet);
             }
 
+            var audioDuration = TimeSpan.Zero;
+            if (audio is not null && audio->duration > 0)
+                audioDuration = TimeSpan.FromSeconds(audio->duration * ffmpeg.av_q2d(audio->time_base));
+
             return new Result(
                 (int)format->nb_streams,
                 parameters->codec_id,
                 parameters->width,
                 parameters->height,
                 parameters->extradata_size,
-                packets);
+                packets,
+                audio is null ? AVCodecID.AV_CODEC_ID_NONE : audio->codecpar->codec_id,
+                audio is null ? 0 : audio->codecpar->sample_rate,
+                audio is null ? 0 : audio->codecpar->extradata_size,
+                audioPackets,
+                audioDuration);
         }
         finally
         {

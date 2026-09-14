@@ -22,11 +22,11 @@ public sealed class AirPlayRequestHandler(AirPlayOptions options, DeviceIdentity
     /// <summary>Stream type for mirrored video.</summary>
     private const int StreamTypeMirrorVideo = 110;
 
-    /// <summary>Stream type for buffered audio, which is what mirroring sends.</summary>
-    private const int StreamTypeBufferedAudio = 96;
+    /// <summary>Stream type for real-time audio over RTP, which is what mirroring sends.</summary>
+    private const int StreamTypeRealtimeAudio = 96;
 
-    /// <summary>Stream type for the realtime (low-latency) audio variant.</summary>
-    private const int StreamTypeRealtimeAudio = 103;
+    /// <summary>Stream type for AirPlay 2's buffered audio, used for media playback.</summary>
+    private const int StreamTypeBufferedAudio = 103;
 
     /// <summary>Qualifier iOS sends to ask for the _airplay._tcp TXT record over HTTP.</summary>
     private const string TxtAirPlayKey = "txtAirPlay";
@@ -57,6 +57,19 @@ public sealed class AirPlayRequestHandler(AirPlayOptions options, DeviceIdentity
     public AirPlaySession? ActiveSession { get; private set; }
 
     public void AttachShutdownToken(CancellationToken token) => _shutdownToken = token;
+
+    /// <summary>
+    /// Drops the session that is currently mirroring, if there is one. Returns false when
+    /// nothing was streaming. The connection's own cleanup raises <see cref="SessionEnded"/>.
+    /// </summary>
+    public bool DisconnectActiveSession()
+    {
+        var session = ActiveSession;
+        if (session is null) return false;
+        _log.Info($"disconnecting {session.Device?.Name ?? session.RemoteEndPoint.ToString()} at the receiver's request");
+        session.Disconnect();
+        return true;
+    }
 
     public async Task<RtspResponse> HandleAsync(RtspRequest request, RtspConnectionContext context, CancellationToken cancellationToken)
     {
@@ -96,6 +109,7 @@ public sealed class AirPlayRequestHandler(AirPlayOptions options, DeviceIdentity
         if (context.Session is AirPlaySession existing) return existing;
 
         var session = new AirPlaySession(identity, context.RemoteEndPoint);
+        session.AttachDisconnect(context.RequestClose);
         context.Session = session;
         return session;
     }
@@ -461,10 +475,29 @@ public sealed class AirPlayRequestHandler(AirPlayOptions options, DeviceIdentity
         }
         else
         {
-            // A partial teardown names the streams to drop; the control connection stays up.
+            // A partial teardown names the streams to drop, and only those are closed; the
+            // control connection stays up. iOS drops its audio stream on its own part way
+            // through a session and sets up a new one later - and closing everything here
+            // took the picture down with it every time it did.
             foreach (var entry in streams.OfType<PlistDictionary>())
-                _log.Info($"TEARDOWN: closing stream type {entry.GetInteger("type")}");
-            await session.StopStreamsAsync().ConfigureAwait(false);
+            {
+                var type = (int)(entry.GetInteger("type") ?? -1);
+                _log.Info($"TEARDOWN: closing stream type {type}");
+
+                switch (type)
+                {
+                    case StreamTypeMirrorVideo:
+                        await session.StopVideoAsync().ConfigureAwait(false);
+                        break;
+                    case StreamTypeRealtimeAudio:
+                    case StreamTypeBufferedAudio:
+                        await session.StopAudioAsync().ConfigureAwait(false);
+                        break;
+                    default:
+                        _log.Warn($"TEARDOWN named stream type {type}, which this receiver does not open");
+                        break;
+                }
+            }
         }
 
         return RtspResponse.Ok();

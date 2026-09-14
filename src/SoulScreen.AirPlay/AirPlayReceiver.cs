@@ -127,6 +127,13 @@ public sealed class AirPlayReceiver : IMirrorSource
     /// changed network shows up again without a restart.</summary>
     public void Reannounce() => _responder.Announce();
 
+    /// <summary>Ends the current mirroring session from this side. The receiver stays up
+    /// and advertised, so the phone can connect again straight away.</summary>
+    public bool Disconnect() => _handler.DisconnectActiveSession();
+
+    /// <summary>When the session now streaming began, or null while nothing is.</summary>
+    public DateTime? SessionStartedAtUtc => _handler.ActiveSession?.StartedAtUtc;
+
     private void SetState(MirrorSourceState state, SourceDeviceInfo? device = null, string? message = null)
     {
         if (device is not null) Device = device;

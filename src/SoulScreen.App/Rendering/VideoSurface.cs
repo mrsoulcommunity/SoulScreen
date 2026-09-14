@@ -1,3 +1,5 @@
+using System.Diagnostics;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Media;
@@ -10,69 +12,55 @@ namespace SoulScreen.App.Rendering;
 /// <summary>
 /// Displays decoded frames.
 /// <para>
-/// The picture reaches the screen through a shared memory section WPF draws straight out of.
-/// The image source is assigned once per geometry and never replaced: swapping it per frame
-/// makes WPF rebuild its render-side resource each time, which is plainly visible as flicker.
+/// The picture reaches the screen through a <see cref="WriteableBitmap"/>, written between
+/// <see cref="WriteableBitmap.TryLock(Duration)"/> and <see cref="WriteableBitmap.Unlock"/>.
+/// That pair is not ceremony: WPF composites on a thread of its own, and the lock is how it
+/// says whether it has finished reading the pixels. Writing a picture into memory the
+/// compositor is reading - which is what backing the image with a plain shared section does -
+/// puts the top of one frame on screen with the bottom of another. At sixty frames a second
+/// it happens most frames, and it looks like the picture is being corrupted in transit.
 /// </para>
 /// <para>
-/// The decode thread hands pictures over through a shallow queue, and the UI thread copies
-/// one into the section during each render pass. Writing the section only on the UI thread,
-/// immediately before composition, is what keeps a half-drawn frame from reaching the
-/// screen; releasing one picture per pass is what spreads a burst of arrivals back out
-/// instead of showing only the last of them.
+/// The bitmap is created once per geometry and assigned to <see cref="Image.Source"/> once.
+/// Every frame after that is a write and an <see cref="WriteableBitmap.AddDirtyRect"/> on the
+/// same bitmap, which is what keeps WPF from rebuilding its render-side texture each frame.
 /// </para>
 /// <para>
-/// The queue is deliberately shallow. Anything held is latency, so beyond a couple of frames
-/// the oldest are discarded rather than played out: a picture that is behind is worse than
-/// one that skipped.
+/// When each picture is shown is <see cref="FramePacer"/>'s decision, not this class's.
 /// </para>
 /// </summary>
 public sealed class VideoSurface : Image, IDisposable
 {
     /// <summary>
-    /// Composition passes a replaced buffer is kept mapped for. WPF's render thread reads a
-    /// section asynchronously and can still be drawing one we have stopped using, so a
-    /// rotation frees the old memory a few frames late rather than immediately.
+    /// How long a composition pass will wait for the compositor to release the back buffer.
+    /// Short on purpose: a frame skipped here costs one picture, whereas blocking the UI
+    /// thread costs the whole pass and every input event queued behind it.
     /// </summary>
-    private const int RetireDelayFrames = 4;
+    private static readonly Duration LockTimeout = new(TimeSpan.FromMilliseconds(3));
 
     private readonly ILogger _log = Log.For("surface");
+    private readonly FramePacer _pacer = new();
 
-    /// <summary>
-    /// Guards which buffer and slots are current. Held only long enough to read or swap
-    /// those references - never across a copy - so the decode thread is never made to wait
-    /// on the UI thread.
-    /// </summary>
-    private readonly object _bufferLock = new();
-
-    /// <summary>Buffers waiting out their delay before release. UI thread only.</summary>
-    private readonly List<(SharedFrameBuffer Buffer, int FramesRemaining)> _retired = [];
-
-    private SharedFrameBuffer? _buffer;
-
-    /// <summary>Hand-off between the decode thread and the UI thread.</summary>
-    private FrameSlots? _slots;
-
-    /// <summary>Geometry the decoder asked for but the UI thread has not allocated yet.</summary>
-    private (int Width, int Height)? _pendingGeometry;
-
-    /// <summary>When the picture waiting in the slots left the decoder.</summary>
-    private DateTime _frameDecodedAtUtc;
+    private WriteableBitmap? _bitmap;
+    private Int32Rect _dirtyRect;
 
     private bool _renderingHooked;
     private long _presentedFrames;
-    private long _supersededFrames;
     private long _latencySumMicroseconds;
     private long _latencySamples;
 
     /// <summary>Composition passes seen, for the achieved refresh rate.</summary>
     private long _compositionPasses;
 
-    private readonly System.Diagnostics.Stopwatch _rateClock = System.Diagnostics.Stopwatch.StartNew();
+    private readonly Stopwatch _rateClock = Stopwatch.StartNew();
     private long _presentedAtLastSample;
     private long _passesAtLastSample;
     private double _presentedPerSecond;
     private double _compositionPerSecond;
+
+    /// <summary>Measured gap between composition passes, in stopwatch ticks.</summary>
+    private long _passIntervalTicks;
+    private long _lastPassTicks;
 
     public VideoSurface()
     {
@@ -90,10 +78,10 @@ public sealed class VideoSurface : Image, IDisposable
     public long PresentedFrameCount => Interlocked.Read(ref _presentedFrames);
 
     /// <summary>
-    /// Pictures overwritten before they could be drawn, because another arrived within the
-    /// same composition pass. Expected whenever the phone outruns the display.
+    /// Pictures discarded without being shown. Expected in small numbers whenever the phone
+    /// outruns the display; a rising count means it is outrunning it consistently.
     /// </summary>
-    public long SupersededFrameCount => Interlocked.Read(ref _supersededFrames);
+    public long SupersededFrameCount => _pacer.DroppedFrameCount;
 
     /// <summary>Size of the picture currently displayed, or empty before the first frame.</summary>
     public Size VideoSize { get; private set; }
@@ -108,9 +96,24 @@ public sealed class VideoSurface : Image, IDisposable
     /// </summary>
     public double CompositionPerSecond => _compositionPerSecond;
 
+    /// <summary>Pictures waiting in the pacing cushion.</summary>
+    public int BufferedFrameCount => _pacer.Depth;
+
+    /// <summary>How long a picture is held before it is shown, which is what hides Wi-Fi's
+    /// unevenness. Safe to change mid-session.</summary>
+    public TimeSpan PresentationDelay
+    {
+        get => _pacer.TargetDelay;
+        set => _pacer.TargetDelay = value;
+    }
+
+    /// <summary>Source rate as the pacer measures it, which is the rate pictures are released at.</summary>
+    public double PacedSourceRate => _pacer.SourceRate;
+
     /// <summary>
-    /// Mean time from a picture leaving the decoder to reaching the screen. The render half
-    /// of the path only; it does not include the network or the decode itself.
+    /// Mean time from a picture leaving the decoder to reaching the screen, which includes
+    /// the delay the pacing cushion deliberately adds. The render half of the path only; it
+    /// does not include the network or the decode itself.
     /// </summary>
     public double AveragePresentLatencyMilliseconds
     {
@@ -125,39 +128,11 @@ public sealed class VideoSurface : Image, IDisposable
     public event EventHandler<Size>? VideoSizeChanged;
 
     /// <summary>
-    /// Accepts a decoded frame from any thread. Returns as soon as the pixels are copied;
-    /// the caller may recycle the frame immediately.
+    /// Accepts a decoded frame from any thread and takes ownership of it. Returns as soon as
+    /// the frame is queued - nothing is copied here, so the decode thread is never made to
+    /// wait on the display.
     /// </summary>
-    public void Present(DecodedVideoFrame frame)
-    {
-        FrameSlots? slots;
-        lock (_bufferLock)
-        {
-            var buffer = _buffer;
-            if (buffer is null || buffer.Width != frame.Width || buffer.Height != frame.Height)
-            {
-                // The image belongs to the dispatcher, so allocation has to happen there.
-                // This picture is dropped; the next one lands in the new buffer.
-                RequestGeometryLocked(frame.Width, frame.Height);
-                return;
-            }
-
-            slots = _slots;
-            _frameDecodedAtUtc = frame.DecodedAtUtc;
-        }
-
-        if (slots is null) return;
-
-        // Outside the lifetime lock: the slots outlive a geometry change independently, and
-        // this copy is the longest thing on this path.
-        var destination = slots.BeginWrite();
-        var source = frame.Buffer;
-        if (source.Length < slots.ByteCount) return;
-        Array.Copy(source, destination, slots.ByteCount);
-
-        var discarded = slots.Publish();
-        if (discarded > 0) Interlocked.Add(ref _supersededFrames, discarded);
-    }
+    public void Present(DecodedVideoFrame frame) => _pacer.Enqueue(frame, Stopwatch.GetTimestamp());
 
     /// <summary>Clears the surface, e.g. when a session ends. Safe from any thread.</summary>
     public void Clear()
@@ -170,77 +145,41 @@ public sealed class VideoSurface : Image, IDisposable
 
     private void ClearCore()
     {
+        _pacer.Reset();
         Source = null;
+        _bitmap = null;
         VideoSize = default;
-
-        lock (_bufferLock)
-        {
-            Retire(_buffer);
-            _buffer = null;
-            _slots = null;
-            _pendingGeometry = null;
-        }
     }
 
-    /// <summary>Notes a geometry to allocate. Caller must hold <see cref="_bufferLock"/>.</summary>
-    private void RequestGeometryLocked(int width, int height)
+    /// <summary>
+    /// Builds the bitmap for one picture geometry. UI thread only - which is where it is
+    /// wanted anyway, since the frame that needs it is being presented on that thread.
+    /// </summary>
+    private WriteableBitmap? Allocate(int width, int height)
     {
-        if (_pendingGeometry is { } pending && pending.Width == width && pending.Height == height) return;
-        _pendingGeometry = (width, height);
-        Dispatcher.BeginInvoke(() => Allocate(width, height));
-    }
-
-    private void Allocate(int width, int height)
-    {
-        SharedFrameBuffer created;
+        WriteableBitmap created;
         try
         {
-            created = SharedFrameBuffer.Create(width, height);
+            // Bgr32 rather than Bgra32: the decoder fills alpha with 255, and asking the
+            // compositor to blend every pixel against it costs real time for no effect.
+            created = new WriteableBitmap(width, height, 96, 96, PixelFormats.Bgr32, null);
         }
         catch (Exception ex)
         {
             _log.Error($"could not allocate a {width}x{height} frame buffer", ex);
-            lock (_bufferLock) _pendingGeometry = null;
-            return;
+            return null;
         }
 
-        lock (_bufferLock)
-        {
-            Retire(_buffer);
-            _buffer = created;
-            _slots = new FrameSlots(created.ByteCount);
-            _pendingGeometry = null;
-        }
+        _bitmap = created;
+        _dirtyRect = new Int32Rect(0, 0, width, height);
 
-        // Assigned once for this geometry. Every subsequent frame is an Invalidate on the
-        // same image, which is what keeps WPF from rebuilding its texture each frame.
-        Source = created.Bitmap;
+        // Assigned once for this geometry. Every subsequent frame is a write and a dirty
+        // rect on the same bitmap.
+        Source = created;
         VideoSize = new Size(width, height);
         _log.Info($"frame buffer allocated for {width}x{height}");
         VideoSizeChanged?.Invoke(this, VideoSize);
-    }
-
-    private void Retire(SharedFrameBuffer? buffer)
-    {
-        if (buffer is null) return;
-        _retired.Add((buffer, RetireDelayFrames));
-    }
-
-    /// <summary>Ages the retirement list by one composition pass, releasing anything due.</summary>
-    private void DrainRetired()
-    {
-        for (var i = _retired.Count - 1; i >= 0; i--)
-        {
-            var (buffer, remaining) = _retired[i];
-            if (remaining > 1)
-            {
-                _retired[i] = (buffer, remaining - 1);
-                continue;
-            }
-
-            _retired.RemoveAt(i);
-            buffer.Dispose();
-        }
+        return created;
     }
 
     private void HookRendering()
@@ -259,40 +198,84 @@ public sealed class VideoSurface : Image, IDisposable
 
     private void OnRendering(object? sender, EventArgs e)
     {
-        if (_retired.Count > 0) DrainRetired();
+        var now = Stopwatch.GetTimestamp();
+        MeasurePass(now);
 
+        var frame = _pacer.TryDequeue(now, _passIntervalTicks);
+        if (frame is null) return;
+
+        using (frame)
+        {
+            var bitmap = _bitmap;
+            if (bitmap is null || bitmap.PixelWidth != frame.Width || bitmap.PixelHeight != frame.Height)
+                bitmap = Allocate(frame.Width, frame.Height);
+            if (bitmap is null) return;
+
+            // Not Lock: the compositor is still reading, and waiting on it here would stall
+            // the UI thread. Leaving this frame unshown is the cheaper of the two, and the
+            // next one is along in a few milliseconds.
+            if (!bitmap.TryLock(LockTimeout)) return;
+
+            try
+            {
+                CopyInto(bitmap, frame);
+                bitmap.AddDirtyRect(_dirtyRect);
+            }
+            finally
+            {
+                bitmap.Unlock();
+            }
+
+            Interlocked.Increment(ref _presentedFrames);
+
+            var latency = (DateTime.UtcNow - frame.DecodedAtUtc).TotalMicroseconds;
+            if (latency is > 0 and < 1_000_000)
+            {
+                Interlocked.Add(ref _latencySumMicroseconds, (long)latency);
+                Interlocked.Increment(ref _latencySamples);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Copies one picture into the locked back buffer. Both sides are almost always four
+    /// bytes per pixel with no row padding, which makes this a single block move; the
+    /// row-by-row path is there for the case where WPF pads its stride.
+    /// </summary>
+    private static void CopyInto(WriteableBitmap bitmap, DecodedVideoFrame frame)
+    {
+        var destinationStride = bitmap.BackBufferStride;
+        var destination = bitmap.BackBuffer;
+        var source = frame.Buffer;
+
+        if (frame.Stride == destinationStride)
+        {
+            Marshal.Copy(source, 0, destination, destinationStride * frame.Height);
+            return;
+        }
+
+        var rowBytes = Math.Min(frame.Stride, destinationStride);
+        for (var y = 0; y < frame.Height; y++)
+            Marshal.Copy(source, y * frame.Stride, destination + y * destinationStride, rowBytes);
+    }
+
+    private void MeasurePass(long now)
+    {
         Interlocked.Increment(ref _compositionPasses);
+
+        if (_lastPassTicks != 0)
+        {
+            var delta = now - _lastPassTicks;
+            // Anything from about five to five hundred passes a second; outside that the
+            // window was hidden or the machine stalled, and it says nothing about refresh.
+            if (delta > Stopwatch.Frequency / 500 && delta < Stopwatch.Frequency / 5)
+                _passIntervalTicks = _passIntervalTicks == 0
+                    ? delta
+                    : _passIntervalTicks + (delta - _passIntervalTicks) / 8;
+        }
+
+        _lastPassTicks = now;
         UpdateRates();
-
-        // Only this thread assigns these, so no lock is needed to read them.
-        var buffer = _buffer;
-        var slots = _slots;
-        if (buffer is null || slots is null) return;
-
-        var picture = slots.BeginRead();
-        if (picture is null) return;
-
-        DateTime decodedAtUtc;
-        try
-        {
-            lock (_bufferLock) decodedAtUtc = _frameDecodedAtUtc;
-            buffer.Write(picture);
-        }
-        finally
-        {
-            slots.EndRead();
-        }
-
-        // The pixels behind the image changed without WPF knowing; this is what tells it.
-        buffer.Bitmap.Invalidate();
-        Interlocked.Increment(ref _presentedFrames);
-
-        var latency = (DateTime.UtcNow - decodedAtUtc).TotalMicroseconds;
-        if (latency is > 0 and < 1_000_000)
-        {
-            Interlocked.Add(ref _latencySumMicroseconds, (long)latency);
-            Interlocked.Increment(ref _latencySamples);
-        }
     }
 
     private void UpdateRates()
@@ -311,20 +294,26 @@ public sealed class VideoSurface : Image, IDisposable
         _rateClock.Restart();
     }
 
-    /// <summary>Takes a snapshot of what is on screen right now, or null before the first frame.</summary>
+    /// <summary>Takes a snapshot of what is on screen right now, or null before the first
+    /// frame. UI thread only.</summary>
     public BitmapSource? Snapshot()
     {
-        lock (_bufferLock) return _buffer?.Snapshot();
+        var bitmap = _bitmap;
+        if (bitmap is null) return null;
+
+        var copy = new WriteableBitmap(bitmap);
+        copy.Freeze();
+        return copy;
     }
 
     /// <summary>Forgets the accumulated statistics, so a new session starts from zero.</summary>
     public void ResetStatistics()
     {
         Interlocked.Exchange(ref _presentedFrames, 0);
-        Interlocked.Exchange(ref _supersededFrames, 0);
         Interlocked.Exchange(ref _latencySumMicroseconds, 0);
         Interlocked.Exchange(ref _latencySamples, 0);
         Interlocked.Exchange(ref _compositionPasses, 0);
+        _pacer.ResetStatistics();
         _presentedAtLastSample = 0;
         _passesAtLastSample = 0;
         _rateClock.Restart();
@@ -334,10 +323,6 @@ public sealed class VideoSurface : Image, IDisposable
     {
         UnhookRendering();
         ClearCore();
-
-        // Nothing pumps the retirement list once rendering is unhooked and the window is
-        // going away, so release the mappings now.
-        foreach (var (buffer, _) in _retired) buffer.Dispose();
-        _retired.Clear();
+        _pacer.Dispose();
     }
 }

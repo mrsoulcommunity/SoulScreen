@@ -54,6 +54,22 @@ public sealed class AirPlaySession : IAsyncDisposable
     /// <summary>True once video frames are actually arriving.</summary>
     public bool IsStreaming => Video is not null;
 
+    /// <summary>When the control connection was opened, for the session's length.</summary>
+    public DateTime StartedAtUtc { get; } = DateTime.UtcNow;
+
+    private Action? _disconnect;
+
+    /// <summary>Installed by the request handler: closes the control connection this
+    /// session belongs to.</summary>
+    internal void AttachDisconnect(Action disconnect) => _disconnect = disconnect;
+
+    /// <summary>
+    /// Ends the session from this side by closing its control connection. The sender's
+    /// Screen Mirroring stops within a second or two, the same as when a receiver is
+    /// switched off.
+    /// </summary>
+    public void Disconnect() => _disconnect?.Invoke();
+
     public FairPlaySession EnsureFairPlay() => FairPlay ??= new FairPlaySession();
 
     public void SetDevice(string? name, string? model)
@@ -123,17 +139,31 @@ public sealed class AirPlaySession : IAsyncDisposable
         return Audio;
     }
 
-    /// <summary>Closes the media channels but keeps the pairing state, which is what a
-    /// TEARDOWN naming specific streams asks for.</summary>
-    public async Task StopStreamsAsync()
+    /// <summary>Closes the mirrored picture's channel and leaves any audio running.</summary>
+    public async Task StopVideoAsync()
     {
         var video = Video;
         Video = null;
         if (video is not null) await video.DisposeAsync().ConfigureAwait(false);
+    }
 
+    /// <summary>
+    /// Closes the audio channel and leaves the picture running. iOS drops its audio stream on
+    /// its own part way through a session and sets up a new one later, with mirroring carrying
+    /// on in between.
+    /// </summary>
+    public async Task StopAudioAsync()
+    {
         var audio = Audio;
         Audio = null;
         if (audio is not null) await audio.DisposeAsync().ConfigureAwait(false);
+    }
+
+    /// <summary>Closes every media channel but keeps the pairing state.</summary>
+    public async Task StopStreamsAsync()
+    {
+        await StopVideoAsync().ConfigureAwait(false);
+        await StopAudioAsync().ConfigureAwait(false);
     }
 
     public async ValueTask DisposeAsync()

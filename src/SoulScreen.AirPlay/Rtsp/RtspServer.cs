@@ -28,6 +28,18 @@ public sealed class RtspConnectionContext(IPEndPoint remoteEndPoint, IPAddress l
     /// <summary>Handler-owned session object; the AirPlay handler stores its session here.</summary>
     public object? Session { get; set; }
 
+    private Action? _close;
+
+    /// <summary>Installed by the server: cancels the connection's read loop, which closes
+    /// the socket and runs the normal end-of-connection cleanup.</summary>
+    internal void AttachCloser(Action close) => _close = close;
+
+    /// <summary>
+    /// Asks the server to drop this connection. The sender sees its control channel close
+    /// and ends the session on its side, exactly as if the receiver had gone away.
+    /// </summary>
+    public void RequestClose() => _close?.Invoke();
+
     public override string ToString() => RemoteEndPoint.ToString();
 }
 
@@ -102,12 +114,22 @@ public sealed class RtspServer(IRtspRequestHandler handler, string serverName = 
         }
     }
 
-    private async Task ServeConnectionAsync(TcpClient client, CancellationToken token)
+    private async Task ServeConnectionAsync(TcpClient client, CancellationToken serverToken)
     {
         var remote = (IPEndPoint)client.Client.RemoteEndPoint!;
         var local = ((IPEndPoint)client.Client.LocalEndPoint!).Address;
         var context = new RtspConnectionContext(remote, local);
         _log.Info($"connection from {remote}");
+
+        // One token per connection, so a single sender can be dropped - the "disconnect"
+        // action in the app - without taking the listener or any other connection with it.
+        using var connectionCts = CancellationTokenSource.CreateLinkedTokenSource(serverToken);
+        var token = connectionCts.Token;
+        context.AttachCloser(() =>
+        {
+            try { connectionCts.Cancel(); }
+            catch (ObjectDisposedException) { /* the connection already ended */ }
+        });
 
         var requestCount = 0;
 

@@ -2,18 +2,21 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         xmlns:rendering="clr-namespace:SoulScreen.App.Rendering"
+        xmlns:controls="clr-namespace:SoulScreen.App.Controls"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="SoulScreen"
         Height="760" Width="480"
         MinHeight="420" MinWidth="360"
-        Background="{StaticResource Surface}"
-        TextOptions.TextFormattingMode="Display">
+        Background="{DynamicResource Surface}"
+        TextOptions.TextFormattingMode="Display"
+        UseLayoutRounding="True"
+        SnapsToDevicePixels="True">
 
     <!-- Typography defaults ride down as inherited values, so anything with its own style
          (buttons, headings) still wins. -->
     <Grid x:Name="RootGrid"
-          TextElement.Foreground="{StaticResource TextPrimary}"
-          TextElement.FontFamily="Segoe UI Variable Text, Segoe UI"
+          TextElement.Foreground="{DynamicResource TextPrimary}"
+          TextElement.FontFamily="{StaticResource TextFont}"
           TextElement.FontSize="13">
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
@@ -24,76 +27,227 @@
         <!-- ===================== toolbar, doubling as the caption =====================
              The strip is the window's caption: dragging, double-click to maximise and the
              system menu all come from WindowChrome. Anything clickable inside it has to opt
-             back out of the caption with IsHitTestVisibleInChrome. -->
-        <Border x:Name="Toolbar" Grid.Row="0" Height="46" Background="{StaticResource SurfaceRaised}"
-                BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,0,0,1">
-            <Grid Margin="14,0,0,0">
-                <!-- Two columns rather than overlapping panels: the controls always get the
-                     room they need and the labels give way, instead of the two colliding in
-                     a narrow window. -->
+             back out of the caption with IsHitTestVisibleInChrome. In fullscreen the same
+             strip is moved over the picture and shown only while the pointer moves. -->
+        <Border x:Name="Toolbar" Grid.Row="0" Height="48" Background="{DynamicResource SurfaceRaised}"
+                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,0,0,1" Panel.ZIndex="40">
+            <Grid x:Name="ToolbarLayout" Margin="14,0,0,0">
+                <!-- Separate columns rather than one strip: the window controls on the right
+                     always keep their place, the receiver name on the left gives way first, and
+                     actions that do not fit between the two move into the overflow popup - see
+                     LayoutToolbar. -->
                 <Grid.ColumnDefinitions>
                     <ColumnDefinition Width="*" MinWidth="0" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
-                <StackPanel Grid.Column="0" Orientation="Horizontal" VerticalAlignment="Center"
-                            Margin="0,0,10,0" ClipToBounds="True">
-                    <Ellipse x:Name="StatusDot" Width="8" Height="8" VerticalAlignment="Center"
-                             Fill="{StaticResource TextTertiary}" />
+                <!-- A dock rather than a stack, so the name is measured against the room it
+                     actually has and ends in an ellipsis instead of being cut mid-letter. -->
+                <DockPanel x:Name="ToolbarIdentity" Grid.Column="0" VerticalAlignment="Center"
+                           Margin="0,0,10,0" ClipToBounds="True">
+                    <Ellipse x:Name="StatusDot" DockPanel.Dock="Left" Width="8" Height="8" VerticalAlignment="Center"
+                             Fill="{DynamicResource TextTertiary}" />
                     <TextBlock x:Name="ReceiverName" Text="SoulScreen" Margin="10,0,0,0"
                                FontSize="13" FontWeight="SemiBold" VerticalAlignment="Center"
                                TextTrimming="CharacterEllipsis" />
-                </StackPanel>
+                    <TextBlock x:Name="SessionTimer" Style="{StaticResource Caption}" Margin="10,0,0,0"
+                               VerticalAlignment="Center" Visibility="Collapsed" />
+                </DockPanel>
 
-                <StackPanel Grid.Column="1" Orientation="Horizontal" HorizontalAlignment="Right"
+                <StackPanel x:Name="ToolbarActions" Grid.Column="1" Orientation="Horizontal"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True">
                     <!-- A drawn dot rather than a glyph: it reads as "record" instantly and
-                         cannot be affected by which icon font happens to be installed. -->
+                         cannot be affected by which icon font happens to be installed. Like the
+                         other icon-only buttons it carries AutomationProperties.Name, since the
+                         glyph is invisible to a screen reader and the tooltip is only help text. -->
                     <ToggleButton x:Name="RecordButton" Style="{StaticResource IconToggle}"
                                   ToolTip="Record to MP4 (Ctrl+R)" IsEnabled="False"
                                   Visibility="Collapsed"
+                                  AutomationProperties.Name="Record the session"
                                   Checked="OnRecordChanged" Unchecked="OnRecordChanged">
                         <Ellipse x:Name="RecordDot" Width="11" Height="11"
-                                 Fill="{StaticResource TextSecondary}" />
+                                 Fill="{DynamicResource TextSecondary}" />
                     </ToggleButton>
                     <ToggleButton x:Name="MuteButton" Style="{StaticResource IconToggle}" Content="&#xE767;"
                                   ToolTip="Mute the phone's audio (Ctrl+M)" Visibility="Collapsed"
+                                  AutomationProperties.Name="Mute the phone's audio"
                                   Checked="OnMuteChanged" Unchecked="OnMuteChanged" />
+                    <!-- Lives next to the mute button because they control the same thing.
+                         Hidden with it: a slider for a stream that is not playing is noise,
+                         and it appears with the mute button when audio is decoded. Slider and
+                         percentage are grouped so they overflow together, and the label is held
+                         wide enough for "100%" so the group keeps one width at every level. -->
+                    <StackPanel x:Name="VolumeGroup" Orientation="Horizontal">
+                        <Slider x:Name="VolumeSlider" Style="{StaticResource VolumeSlider}" Visibility="Collapsed"
+                                Minimum="0" Maximum="1" Value="1" IsMoveToPointEnabled="True"
+                                ToolTip="Phone audio volume" AutomationProperties.Name="Phone audio volume"
+                                ValueChanged="OnVolumeChanged" />
+                        <TextBlock x:Name="VolumeLabel" Style="{StaticResource Caption}" FontSize="10.5"
+                                   Margin="6,0,0,0" MinWidth="30" VerticalAlignment="Center" Visibility="Collapsed"
+                                   AutomationProperties.Name="Phone audio volume percentage" />
+                    </StackPanel>
                     <Button x:Name="SnapshotButton" Style="{StaticResource IconButton}" Content="&#xE722;"
-                            ToolTip="Save a screenshot (Ctrl+S)" Click="OnSnapshot" IsEnabled="False" />
+                            ToolTip="Save a screenshot (Ctrl+S)" Click="OnSnapshot" IsEnabled="False"
+                            AutomationProperties.Name="Save a screenshot" />
+                    <Button x:Name="DisconnectButton" Style="{StaticResource IconButton}" Content="&#xE7E8;"
+                            ToolTip="Disconnect the iPhone" Click="OnDisconnect" Visibility="Collapsed"
+                            AutomationProperties.Name="Disconnect the iPhone" />
+                    <ToggleButton x:Name="StatsButton" Style="{StaticResource IconToggle}" Content="&#xE9D9;"
+                                  ToolTip="Statistics (Ctrl+I)" AutomationProperties.Name="Statistics overlay"
+                                  Visibility="Collapsed" Checked="OnStatsToggled" Unchecked="OnStatsToggled" />
                     <ToggleButton x:Name="PinButton" Style="{StaticResource IconToggle}" Content="&#xE718;"
-                                  ToolTip="Keep on top" Checked="OnPinChanged" Unchecked="OnPinChanged" />
+                                  ToolTip="Keep on top (Ctrl+T)" AutomationProperties.Name="Keep on top"
+                                  Checked="OnPinChanged" Unchecked="OnPinChanged" />
                     <Button x:Name="FullscreenButton" Style="{StaticResource IconButton}" Content="&#xE740;"
-                            ToolTip="Fullscreen (F11)" Click="OnToggleFullscreen" />
+                            ToolTip="Fullscreen (F11)" Click="OnToggleFullscreen"
+                            AutomationProperties.Name="Fullscreen" />
                     <ToggleButton x:Name="LogButton" Style="{StaticResource IconToggle}" Content="&#xE8FD;"
-                                  ToolTip="Activity log" Checked="OnLogToggled" Unchecked="OnLogToggled" />
+                                  ToolTip="Activity log (Ctrl+L)" AutomationProperties.Name="Activity log"
+                                  Checked="OnLogToggled" Unchecked="OnLogToggled" />
                     <ToggleButton x:Name="SettingsButton" Style="{StaticResource IconToggle}" Content="&#xE713;"
-                                  ToolTip="Settings" Checked="OnSettingsToggled" Unchecked="OnSettingsToggled" />
+                                  ToolTip="Settings (Ctrl+,)" AutomationProperties.Name="Settings"
+                                  Checked="OnSettingsToggled" Unchecked="OnSettingsToggled" />
+                </StackPanel>
 
-                    <Rectangle Width="1" Margin="8,12" Fill="{StaticResource BorderBrush}" />
+                <!-- Only shown when some of the actions did not fit. -->
+                <ToggleButton x:Name="MoreButton" Grid.Column="2" Style="{StaticResource IconToggle}" Content="&#xE712;"
+                              ToolTip="More" Visibility="Collapsed" AutomationProperties.Name="More toolbar actions"
+                              shell:WindowChrome.IsHitTestVisibleInChrome="True" />
+
+                <StackPanel x:Name="CaptionButtons" Grid.Column="3" Orientation="Horizontal"
+                            shell:WindowChrome.IsHitTestVisibleInChrome="True">
+                    <Rectangle Width="1" Margin="8,13" Fill="{DynamicResource BorderBrush}" />
 
                     <Button x:Name="MinimiseButton" Style="{StaticResource CaptionButton}" Content="&#xE921;"
-                            ToolTip="Minimise" Click="OnMinimise" />
+                            ToolTip="Minimise" Click="OnMinimise" AutomationProperties.Name="Minimise" />
                     <Button x:Name="MaximiseButton" Style="{StaticResource CaptionButton}" Content="&#xE922;"
-                            ToolTip="Maximise" Click="OnMaximise" />
+                            ToolTip="Maximise" Click="OnMaximise" AutomationProperties.Name="Maximise" />
                     <Button x:Name="CloseButton" Style="{StaticResource CloseButton}" Content="&#xE8BB;"
-                            ToolTip="Close" Click="OnClose" />
+                            ToolTip="Close" Click="OnClose" AutomationProperties.Name="Close" />
                 </StackPanel>
+
+                <!-- The actions that did not fit: the same controls moved here, not copies of
+                     them, so their state and handlers come along unchanged. -->
+                <Popup x:Name="OverflowPopup" PlacementTarget="{Binding ElementName=MoreButton}"
+                       Placement="Custom" StaysOpen="False" AllowsTransparency="True"
+                       IsOpen="{Binding IsChecked, ElementName=MoreButton, Mode=TwoWay}">
+                    <Border Background="{DynamicResource SurfaceRaised}" BorderBrush="{DynamicResource BorderBrush}"
+                            BorderThickness="1" CornerRadius="9" Padding="6,4" Margin="8,6,8,12"
+                            TextElement.Foreground="{DynamicResource TextPrimary}"
+                            TextElement.FontFamily="{StaticResource TextFont}">
+                        <Border.Effect>
+                            <DropShadowEffect BlurRadius="14" ShadowDepth="3" Opacity="0.45" />
+                        </Border.Effect>
+                        <StackPanel x:Name="OverflowActions" Orientation="Horizontal" />
+                    </Border>
+                </Popup>
             </Grid>
         </Border>
 
         <!-- ============================ content ============================ -->
-        <Grid Grid.Row="1" ClipToBounds="True">
+        <Grid x:Name="ContentGrid" Grid.Row="1" ClipToBounds="True">
 
-            <!-- The mirrored screen, black-backed so letterboxing reads as intentional. -->
-            <Border x:Name="VideoHost" Background="#FF000000" Visibility="Collapsed">
-                <rendering:VideoSurface x:Name="Video" />
+            <!-- The mirrored screen, black-backed so letterboxing reads as intentional. The
+                 viewport carries the zoom and pan; the surface itself carries rotation and
+                 flip as a layout transform, so it is measured at its rotated size. -->
+            <Border x:Name="VideoHost" Background="{StaticResource VideoBackground}" Visibility="Collapsed">
+                <Grid x:Name="VideoViewport" ClipToBounds="True" Background="Transparent">
+                    <Grid.RenderTransform>
+                        <TransformGroup>
+                            <ScaleTransform x:Name="ZoomScale" ScaleX="1" ScaleY="1" />
+                            <TranslateTransform x:Name="ZoomPan" X="0" Y="0" />
+                        </TransformGroup>
+                    </Grid.RenderTransform>
+                    <rendering:VideoSurface x:Name="Video">
+                        <rendering:VideoSurface.LayoutTransform>
+                            <TransformGroup>
+                                <ScaleTransform x:Name="FlipTransform" ScaleX="1" ScaleY="1" />
+                                <RotateTransform x:Name="RotationTransform" Angle="0" />
+                            </TransformGroup>
+                        </rendering:VideoSurface.LayoutTransform>
+                    </rendering:VideoSurface>
+                </Grid>
+                <Border.ContextMenu>
+                    <ContextMenu x:Name="VideoMenu" Opened="OnVideoMenuOpened">
+                        <MenuItem Header="Fullscreen" InputGestureText="F11" Click="OnToggleFullscreen" />
+                        <Separator />
+                        <MenuItem Header="Display">
+                            <MenuItem x:Name="MenuFit" Header="Fit" Click="OnMenuFit" Tag="Fit" />
+                            <MenuItem x:Name="MenuFill" Header="Fill" Click="OnMenuFit" Tag="Fill" />
+                            <MenuItem x:Name="MenuStretch" Header="Stretch" Click="OnMenuFit" Tag="Stretch" />
+                            <MenuItem x:Name="MenuActual" Header="Actual size" Click="OnMenuFit" Tag="Actual" />
+                        </MenuItem>
+                        <MenuItem Header="Rotate">
+                            <MenuItem x:Name="MenuRotate0" Header="Upright" Click="OnMenuRotate" Tag="0" />
+                            <MenuItem x:Name="MenuRotate90" Header="90° clockwise" Click="OnMenuRotate" Tag="90" />
+                            <MenuItem x:Name="MenuRotate180" Header="180°" Click="OnMenuRotate" Tag="180" />
+                            <MenuItem x:Name="MenuRotate270" Header="90° counter-clockwise" Click="OnMenuRotate" Tag="270" />
+                            <Separator />
+                            <MenuItem x:Name="MenuMirror" Header="Mirror horizontally" Click="OnMenuMirror" />
+                        </MenuItem>
+                        <MenuItem Header="Zoom">
+                            <MenuItem Header="Zoom in" InputGestureText="Ctrl++" Click="OnMenuZoomIn" />
+                            <MenuItem Header="Zoom out" InputGestureText="Ctrl+-" Click="OnMenuZoomOut" />
+                            <MenuItem Header="Reset zoom" InputGestureText="Ctrl+0" Click="OnMenuZoomReset" />
+                        </MenuItem>
+                        <Separator />
+                        <MenuItem Header="Save screenshot" InputGestureText="Ctrl+S" Click="OnSnapshot" />
+                        <MenuItem Header="Copy screenshot" InputGestureText="Ctrl+Shift+C" Click="OnCopySnapshot" />
+                        <MenuItem x:Name="MenuRecord" Header="Record to MP4" InputGestureText="Ctrl+R" Click="OnMenuRecord" />
+                        <Separator />
+                        <MenuItem x:Name="MenuMute" Header="Mute" InputGestureText="Ctrl+M" Click="OnMenuMute" />
+                        <MenuItem x:Name="MenuStats" Header="Show statistics" InputGestureText="Ctrl+I" Click="OnMenuStats" />
+                        <MenuItem x:Name="MenuPin" Header="Keep on top" InputGestureText="Ctrl+T" Click="OnMenuPin" />
+                        <Separator />
+                        <MenuItem Header="Disconnect iPhone" Click="OnDisconnect" />
+                    </ContextMenu>
+                </Border.ContextMenu>
+            </Border>
+
+            <!-- A brief white flash over the picture when a screenshot is taken, like a camera. -->
+            <Border x:Name="FlashOverlay" Background="{StaticResource Flash}" Opacity="0" IsHitTestVisible="False" />
+
+            <!-- Statistics, over the top-left of the picture. Fixed dark colours: it sits on video. -->
+            <Border x:Name="StatsHud" Visibility="Collapsed" HorizontalAlignment="Left" VerticalAlignment="Top"
+                    Margin="14,14,0,0" Background="{StaticResource HudBackground}" BorderBrush="{StaticResource HudBorder}"
+                    BorderThickness="1" CornerRadius="10" Padding="13,10" Panel.ZIndex="20" IsHitTestVisible="False"
+                    TextElement.Foreground="{StaticResource HudText}">
+                <Grid x:Name="StatsGrid">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="Auto" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+                    <Grid.Resources>
+                        <Style x:Key="HudLabel" TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="{StaticResource HudTextDim}" />
+                            <Setter Property="FontFamily" Value="{StaticResource TextFont}" />
+                            <Setter Property="FontSize" Value="11.5" />
+                            <Setter Property="Margin" Value="0,1,16,1" />
+                        </Style>
+                        <Style x:Key="HudValue" TargetType="TextBlock">
+                            <Setter Property="Foreground" Value="{StaticResource HudText}" />
+                            <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+                            <Setter Property="FontSize" Value="11.5" />
+                            <Setter Property="Margin" Value="0,1,0,1" />
+                            <Setter Property="HorizontalAlignment" Value="Right" />
+                        </Style>
+                    </Grid.Resources>
+                </Grid>
+            </Border>
+
+            <!-- Shown while the picture is zoomed, so the user knows why it does not fit. -->
+            <Border x:Name="ZoomBadge" Visibility="Collapsed" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                    Margin="0,0,14,14" Background="{StaticResource HudBackground}" BorderBrush="{StaticResource HudBorder}"
+                    BorderThickness="1" CornerRadius="12" Padding="11,4" Panel.ZIndex="20" IsHitTestVisible="False">
+                <TextBlock x:Name="ZoomText" Foreground="{StaticResource HudText}" FontSize="11.5" FontWeight="SemiBold" />
             </Border>
 
             <!-- Sits over the picture, because the thing it explains is only visible while
                  the picture is on screen and the idle panel is hidden. -->
             <Border x:Name="NoticeBar" Visibility="Collapsed" VerticalAlignment="Top" Panel.ZIndex="10"
-                    Background="#F21A1508" BorderBrush="#59FBBF24" BorderThickness="0,0,0,1">
+                    Background="{DynamicResource NoticeBackground}" BorderBrush="{DynamicResource WarningBorder}" BorderThickness="0,0,0,1">
                 <Grid Margin="14,10">
                     <Grid.ColumnDefinitions>
                         <ColumnDefinition Width="Auto" />
@@ -101,17 +255,15 @@
                         <ColumnDefinition Width="Auto" />
                     </Grid.ColumnDefinitions>
                     <TextBlock Grid.Column="0" Text="&#xE7BA;" FontFamily="{StaticResource IconFont}"
-                               Foreground="{StaticResource Warning}" FontSize="14"
+                               Foreground="{DynamicResource Warning}" FontSize="14"
                                VerticalAlignment="Top" Margin="0,1,11,0" />
                     <StackPanel Grid.Column="1">
-                        <TextBlock x:Name="NoticeTitle" FontSize="12.5" FontWeight="SemiBold"
-                                   TextWrapping="Wrap" />
-                        <TextBlock x:Name="NoticeDetail" Style="{StaticResource Caption}"
-                                   TextWrapping="Wrap" Margin="0,3,0,0" />
+                        <TextBlock x:Name="NoticeTitle" FontSize="12.5" FontWeight="SemiBold" TextWrapping="Wrap" />
+                        <TextBlock x:Name="NoticeDetail" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,3,0,0" />
                     </StackPanel>
                     <Button Grid.Column="2" Style="{StaticResource IconButton}" Content="&#xE8BB;"
                             FontSize="11" Width="26" Height="26" VerticalAlignment="Top"
-                            ToolTip="Dismiss" Click="OnDismissNotice" />
+                            ToolTip="Dismiss" Click="OnDismissNotice" AutomationProperties.Name="Dismiss the notice" />
                 </Grid>
             </Border>
 
@@ -121,162 +273,463 @@
                      needs a host that is at least as tall as the viewport. Below that height
                      the Grid stops growing and the scrollbar takes over. -->
                 <Grid MinHeight="{Binding ViewportHeight, RelativeSource={RelativeSource AncestorType=ScrollViewer}}">
-                <StackPanel Margin="34,32" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="360">
+                    <StackPanel Margin="34,32" HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="380">
 
-                    <TextBlock Text="&#xE8EA;" FontFamily="{StaticResource IconFont}" FontSize="40"
-                               Foreground="{StaticResource AccentMuted}" HorizontalAlignment="Center" />
+                        <Grid Width="72" Height="72" HorizontalAlignment="Center">
+                            <Ellipse x:Name="IdleHalo" Fill="{DynamicResource AccentTint}" />
+                            <TextBlock x:Name="IdleGlyph" Text="&#xE8EA;" FontFamily="{StaticResource IconFont}" FontSize="30"
+                                       Foreground="{DynamicResource Accent}" HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Grid>
 
-                    <TextBlock x:Name="IdleTitle" Text="Waiting for your iPhone"
-                               Style="{StaticResource Heading}" FontSize="23"
-                               HorizontalAlignment="Center" TextAlignment="Center" Margin="0,20,0,0" />
+                        <TextBlock x:Name="IdleTitle" Text="Waiting for your iPhone"
+                                   Style="{StaticResource Heading}" FontSize="24"
+                                   HorizontalAlignment="Center" TextAlignment="Center" Margin="0,22,0,0" />
 
-                    <TextBlock x:Name="IdleSubtitle" Style="{StaticResource Subheading}"
-                               HorizontalAlignment="Center" TextAlignment="Center"
-                               TextWrapping="Wrap" Margin="0,9,0,0"
-                               Text="This PC is advertising itself on your network." />
+                        <TextBlock x:Name="IdleSubtitle" Style="{StaticResource Subheading}"
+                                   HorizontalAlignment="Center" TextAlignment="Center"
+                                   TextWrapping="Wrap" Margin="0,8,0,0"
+                                   Text="This PC is advertising itself on your network." />
 
-                    <Border Background="{StaticResource SurfaceRaised}" CornerRadius="10"
-                            BorderBrush="{StaticResource BorderBrush}" BorderThickness="1"
-                            Padding="20,17" Margin="0,26,0,0">
-                        <StackPanel>
-                            <StackPanel Orientation="Horizontal">
-                                <TextBlock Text="1" Style="{StaticResource Metric}" Width="16"
-                                           Foreground="{StaticResource Accent}" />
-                                <TextBlock Style="{StaticResource Subheading}" TextWrapping="Wrap"
-                                           Text="Open Control Center on the iPhone" />
-                            </StackPanel>
-                            <StackPanel Orientation="Horizontal" Margin="0,11,0,0">
-                                <TextBlock Text="2" Style="{StaticResource Metric}" Width="16"
-                                           Foreground="{StaticResource Accent}" />
-                                <TextBlock Style="{StaticResource Subheading}" TextWrapping="Wrap"
-                                           Text="Tap Screen Mirroring" />
-                            </StackPanel>
-                            <StackPanel Orientation="Horizontal" Margin="0,11,0,0">
-                                <TextBlock Text="3" Style="{StaticResource Metric}" Width="16"
-                                           Foreground="{StaticResource Accent}" />
-                                <TextBlock Style="{StaticResource Subheading}" TextWrapping="Wrap">
-                                    <Run Text="Choose" />
-                                    <Run x:Name="IdleReceiverName" Text="SoulScreen"
-                                         Foreground="{StaticResource TextPrimary}" FontWeight="SemiBold" />
-                                </TextBlock>
-                            </StackPanel>
-                        </StackPanel>
-                    </Border>
-
-                    <!-- Problems that will stop mirroring before it starts. -->
-                    <ItemsControl x:Name="WarningList" Margin="0,14,0,0">
-                        <ItemsControl.ItemTemplate>
-                            <DataTemplate>
-                                <Border Background="#1AFBBF24" CornerRadius="9" Padding="15,12" Margin="0,0,0,9"
-                                        BorderBrush="#40FBBF24" BorderThickness="1">
-                                    <StackPanel Orientation="Horizontal">
-                                        <TextBlock Text="&#xE7BA;" FontFamily="{StaticResource IconFont}"
-                                                   Foreground="{StaticResource Warning}" FontSize="14"
-                                                   VerticalAlignment="Top" Margin="0,1,11,0" />
-                                        <StackPanel>
-                                            <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="SemiBold"
-                                                       TextWrapping="Wrap" />
-                                            <TextBlock Text="{Binding Detail}" Style="{StaticResource Caption}"
-                                                       TextWrapping="Wrap" Margin="0,4,0,0" />
-                                        </StackPanel>
-                                    </StackPanel>
-                                </Border>
-                            </DataTemplate>
-                        </ItemsControl.ItemTemplate>
-                    </ItemsControl>
-
-                    <Button x:Name="ReceiverToggle" Style="{StaticResource GhostButton}"
-                            Content="Stop receiver" HorizontalAlignment="Center"
-                            Margin="0,20,0,0" Click="OnToggleReceiver" />
-                </StackPanel>
-                </Grid>
-            </ScrollViewer>
-
-            <!-- Settings, as an overlay so the app stays a single window. -->
-            <Border x:Name="SettingsPanel" Visibility="Collapsed" Background="{StaticResource Surface}">
-                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,4,0">
-                    <StackPanel Margin="30,28" MaxWidth="380" HorizontalAlignment="Center">
-                        <TextBlock Text="Settings" Style="{StaticResource Heading}" FontSize="20" />
-
-                        <TextBlock Text="Receiver name" Style="{StaticResource Caption}" Margin="0,22,0,6" />
-                        <TextBox x:Name="NameBox" />
-                        <TextBlock Text="What the iPhone shows in its Screen Mirroring list."
-                                   Style="{StaticResource Caption}" Margin="0,6,0,0" TextWrapping="Wrap" />
-
-                        <TextBlock Text="Control port" Style="{StaticResource Caption}" Margin="0,18,0,6" />
-                        <TextBox x:Name="PortBox" Width="110" HorizontalAlignment="Left" />
-                        <TextBlock Text="7000 is what Apple receivers use. Change it only if something else holds the port."
-                                   Style="{StaticResource Caption}" Margin="0,6,0,0" TextWrapping="Wrap" />
-
-                        <TextBlock Text="Advertised resolution" Style="{StaticResource Caption}" Margin="0,18,0,6" />
-                        <StackPanel Orientation="Horizontal">
-                            <TextBox x:Name="WidthBox" Width="76" />
-                            <TextBlock Text="x" Style="{StaticResource Subheading}" Margin="8,0" VerticalAlignment="Center" />
-                            <TextBox x:Name="HeightBox" Width="76" />
-                            <TextBlock Text="at" Style="{StaticResource Subheading}" Margin="12,0,8,0" VerticalAlignment="Center" />
-                            <TextBox x:Name="RefreshBox" Width="56" />
-                            <TextBlock Text="fps" Style="{StaticResource Subheading}" Margin="8,0,0,0" VerticalAlignment="Center" />
-                        </StackPanel>
-                        <TextBlock Text="The phone encodes to fit this. Lower it if the picture stutters over Wi-Fi."
-                                   Style="{StaticResource Caption}" Margin="0,6,0,0" TextWrapping="Wrap" />
-
-                        <CheckBox x:Name="AudioCheck" Content="Receive audio from the phone" Margin="0,22,0,0" />
-                        <CheckBox x:Name="AutoStartCheck" Content="Start the receiver when SoulScreen opens" Margin="0,13,0,0" />
-                        <CheckBox x:Name="TraceCheck" Content="Log every protocol message" Margin="0,13,0,0" />
-                        <TextBlock Text="Verbose, but the first thing to turn on when a phone will not connect."
-                                   Style="{StaticResource Caption}" Margin="27,5,0,0" TextWrapping="Wrap" />
-
-                        <Border Background="{StaticResource SurfaceRaised}" CornerRadius="9" Padding="15,13" Margin="0,24,0,0"
-                                BorderBrush="{StaticResource BorderBrush}" BorderThickness="1">
+                        <Border Style="{StaticResource Card}" Padding="20,17" Margin="0,26,0,0">
                             <StackPanel>
-                                <TextBlock Text="This receiver" Style="{StaticResource Caption}" />
-                                <TextBlock x:Name="IdentityText" Style="{StaticResource Metric}" Margin="0,7,0,0"
-                                           TextWrapping="Wrap" />
+                                <StackPanel Orientation="Horizontal">
+                                    <Border Width="20" Height="20" CornerRadius="10" Background="{DynamicResource AccentTint}" VerticalAlignment="Top">
+                                        <TextBlock Text="1" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource Accent}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                    <TextBlock Style="{StaticResource Subheading}" TextWrapping="Wrap" Margin="12,0,0,0"
+                                               Text="Open Control Center on the iPhone" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                    <Border Width="20" Height="20" CornerRadius="10" Background="{DynamicResource AccentTint}" VerticalAlignment="Top">
+                                        <TextBlock Text="2" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource Accent}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                    <TextBlock Style="{StaticResource Subheading}" TextWrapping="Wrap" Margin="12,0,0,0"
+                                               Text="Tap Screen Mirroring" />
+                                </StackPanel>
+                                <StackPanel Orientation="Horizontal" Margin="0,12,0,0">
+                                    <Border Width="20" Height="20" CornerRadius="10" Background="{DynamicResource AccentTint}" VerticalAlignment="Top">
+                                        <TextBlock Text="3" FontSize="11" FontWeight="SemiBold" Foreground="{DynamicResource Accent}"
+                                                   HorizontalAlignment="Center" VerticalAlignment="Center" />
+                                    </Border>
+                                    <TextBlock Style="{StaticResource Subheading}" TextWrapping="Wrap" Margin="12,0,0,0">
+                                        <Run Text="Choose" />
+                                        <Run x:Name="IdleReceiverName" Text="SoulScreen"
+                                             Foreground="{DynamicResource TextPrimary}" FontWeight="SemiBold" />
+                                    </TextBlock>
+                                </StackPanel>
                             </StackPanel>
                         </Border>
 
-                        <StackPanel Orientation="Horizontal" Margin="0,24,0,0">
-                            <Button Content="Apply and restart receiver" Style="{StaticResource PrimaryButton}"
-                                    Click="OnApplySettings" />
-                            <Button Content="Cancel" Style="{StaticResource GhostButton}" Margin="10,0,0,0"
-                                    Click="OnCancelSettings" />
+                        <!-- Which network this PC is on: the first thing to check when the
+                             receiver does not appear on the phone. -->
+                        <StackPanel x:Name="NetworkLine" Orientation="Horizontal" HorizontalAlignment="Center" Margin="0,16,0,0">
+                            <TextBlock x:Name="NetworkGlyph" Text="&#xE701;" FontFamily="{StaticResource IconFont}" FontSize="12"
+                                       Foreground="{DynamicResource TextTertiary}" VerticalAlignment="Center" Margin="0,0,7,0" />
+                            <TextBlock x:Name="NetworkText" Style="{StaticResource Caption}" VerticalAlignment="Center" />
                         </StackPanel>
-                    </StackPanel>
-                </ScrollViewer>
-            </Border>
 
-            <!-- Activity log, docked over the bottom of the content area. -->
-            <Border x:Name="LogPanel" Visibility="Collapsed" VerticalAlignment="Bottom" Height="210"
-                    Background="#F00E0F13" BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
+                        <!-- Problems that will stop mirroring before it starts. -->
+                        <ItemsControl x:Name="WarningList" Margin="0,14,0,0">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border Background="{DynamicResource WarningTint}" CornerRadius="10" Padding="15,12" Margin="0,0,0,9"
+                                            BorderBrush="{DynamicResource WarningBorder}" BorderThickness="1">
+                                        <StackPanel Orientation="Horizontal">
+                                            <TextBlock Text="&#xE7BA;" FontFamily="{StaticResource IconFont}"
+                                                       Foreground="{DynamicResource Warning}" FontSize="14"
+                                                       VerticalAlignment="Top" Margin="0,1,11,0" />
+                                            <StackPanel>
+                                                <TextBlock Text="{Binding Title}" FontSize="13" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                                <TextBlock Text="{Binding Detail}" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,4,0,0" />
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <Button x:Name="ReceiverToggle" Style="{StaticResource GhostButton}"
+                                Content="Stop receiver" HorizontalAlignment="Center"
+                                Margin="0,20,0,0" Click="OnToggleReceiver" />
+
+                        <!-- A way to see the picture path working with no phone in the room. -->
+                        <Button x:Name="DemoLink" Style="{StaticResource LinkButton}" Content="Try a demo without a phone"
+                                HorizontalAlignment="Center" Margin="0,14,0,0" Visibility="Collapsed" Click="OnStartDemo" />
+                    </StackPanel>
+                </Grid>
+            </ScrollViewer>
+
+            <!-- Settings, as an overlay so the app stays a single window. Laid out as
+                 System Settings does: titled groups of cards, one option per row. -->
+            <Border x:Name="SettingsPanel" Visibility="Collapsed" Background="{DynamicResource Surface}" Panel.ZIndex="30">
                 <Grid>
                     <Grid.RowDefinitions>
                         <RowDefinition Height="Auto" />
                         <RowDefinition Height="*" />
                     </Grid.RowDefinitions>
-                    <Grid Margin="14,8,8,4">
-                        <TextBlock Text="Activity" Style="{StaticResource Caption}" VerticalAlignment="Center" />
-                        <StackPanel Orientation="Horizontal" HorizontalAlignment="Right">
+                    <Grid Margin="24,20,16,10" MaxWidth="560">
+                        <TextBlock Text="Settings" Style="{StaticResource Heading}" FontSize="22" VerticalAlignment="Center" />
+                        <Button Style="{StaticResource IconButton}" Content="&#xE8BB;" FontSize="11" HorizontalAlignment="Right"
+                                ToolTip="Close (Esc)" Click="OnCloseSettings" AutomationProperties.Name="Close settings" />
+                    </Grid>
+                    <ScrollViewer Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="0,0,4,0">
+                        <StackPanel Margin="24,0,20,32" MaxWidth="560">
+
+                            <!-- ============================== receiver ============================== -->
+                            <TextBlock Text="RECEIVER" Style="{StaticResource SectionTitle}" />
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <controls:SettingRow Title="Name" IsFirst="True" Stacked="True"
+                                                         Detail="What the iPhone shows in its Screen Mirroring list.">
+                                        <TextBox x:Name="NameBox" TextChanged="OnReceiverFieldChanged" MaxLength="63" />
+                                    </controls:SettingRow>
+                                    <controls:SettingRow Title="Control port"
+                                                         Detail="7000 is what Apple receivers use. Change it only if something else holds the port.">
+                                        <TextBox x:Name="PortBox" Width="84" TextAlignment="Center" TextChanged="OnReceiverFieldChanged" MaxLength="5" />
+                                    </controls:SettingRow>
+                                    <controls:SettingRow Title="Advertised resolution" Stacked="True"
+                                                         Detail="The phone encodes to fit this. Lower it if the picture stutters over Wi-Fi.">
+                                        <StackPanel>
+                                            <ComboBox x:Name="ResolutionPresetBox" SelectionChanged="OnResolutionPresetChanged" HorizontalAlignment="Left" MinWidth="220" />
+                                            <StackPanel x:Name="CustomResolutionRow" Orientation="Horizontal" Margin="0,8,0,0">
+                                                <TextBox x:Name="WidthBox" Width="70" TextAlignment="Center" TextChanged="OnReceiverFieldChanged" MaxLength="4" />
+                                                <TextBlock Text="×" Style="{StaticResource Subheading}" Margin="7,0" VerticalAlignment="Center" />
+                                                <TextBox x:Name="HeightBox" Width="70" TextAlignment="Center" TextChanged="OnReceiverFieldChanged" MaxLength="4" />
+                                                <TextBlock Text="at" Style="{StaticResource Subheading}" Margin="10,0,7,0" VerticalAlignment="Center" />
+                                                <TextBox x:Name="RefreshBox" Width="54" TextAlignment="Center" TextChanged="OnReceiverFieldChanged" MaxLength="3" />
+                                                <TextBlock Text="fps" Style="{StaticResource Subheading}" Margin="7,0,0,0" VerticalAlignment="Center" />
+                                            </StackPanel>
+                                        </StackPanel>
+                                    </controls:SettingRow>
+                                    <controls:SettingRow Title="Receive audio" Detail="Play the phone's sound through this PC.">
+                                        <CheckBox x:Name="AudioCheck" Style="{StaticResource Switch}" Click="OnReceiverFieldChanged" />
+                                    </controls:SettingRow>
+                                    <controls:SettingRow Title="Start the receiver when SoulScreen opens">
+                                        <CheckBox x:Name="AutoStartCheck" Style="{StaticResource Switch}" Click="OnInstantSettingChanged" />
+                                    </controls:SettingRow>
+                                    <controls:SettingRow Title="Log every protocol message"
+                                                         Detail="Verbose, but the first thing to turn on when a phone will not connect.">
+                                        <CheckBox x:Name="TraceCheck" Style="{StaticResource Switch}" Click="OnInstantSettingChanged" />
+                                    </controls:SettingRow>
+                                    <!-- Appears only once something above has been edited. -->
+                                    <Border x:Name="ReceiverApplyBar" Visibility="Collapsed" BorderThickness="0,1,0,0"
+                                            BorderBrush="{DynamicResource BorderSubtle}" Padding="14,11" Background="{DynamicResource AccentTint}"
+                                            CornerRadius="0,0,11,11">
+                                        <StackPanel>
+                                            <TextBlock x:Name="ReceiverError" Style="{StaticResource ErrorText}" Visibility="Collapsed" Margin="0,0,0,8" />
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBlock Text="These take effect when the receiver restarts." Style="{StaticResource Caption}"
+                                                           Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,10,0" />
+                                                <Button Grid.Column="1" Content="Discard" Style="{StaticResource SmallButton}" Click="OnDiscardReceiverChanges" Margin="0,0,8,0" />
+                                                <Button Grid.Column="2" Content="Apply and restart" Style="{StaticResource PrimaryButton}" Padding="12,6" FontSize="12.5"
+                                                        Click="OnApplySettings" />
+                                            </Grid>
+                                        </StackPanel>
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- ============================== appearance ============================== -->
+                            <TextBlock Text="APPEARANCE" Style="{StaticResource SectionTitle}" />
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <controls:SettingRow Title="Theme" IsFirst="True" Detail="System follows the Windows light or dark setting.">
+                                        <Border Style="{StaticResource SegmentTrack}">
+                                            <StackPanel Orientation="Horizontal">
+                                                <RadioButton x:Name="ThemeSystem" Style="{StaticResource Segment}" Content="System" GroupName="Theme" Checked="OnThemeChanged" />
+                                                <RadioButton x:Name="ThemeDark" Style="{StaticResource Segment}" Content="Dark" GroupName="Theme" Checked="OnThemeChanged" />
+                                                <RadioButton x:Name="ThemeLight" Style="{StaticResource Segment}" Content="Light" GroupName="Theme" Checked="OnThemeChanged" />
+                                            </StackPanel>
+                                        </Border>
+                                    </controls:SettingRow>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- ============================== picture ============================== -->
+                            <TextBlock Text="PICTURE" Style="{StaticResource SectionTitle}" />
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <controls:SettingRow Title="Fit" IsFirst="True" Detail="How the phone's screen is placed in the window.">
+                                        <Border Style="{StaticResource SegmentTrack}">
+                                            <StackPanel Orientation="Horizontal">
+                                                <RadioButton x:Name="FitFit" Style="{StaticResource Segment}" Content="Fit" GroupName="Fit" Checked="OnFitChanged" />
+                                                <RadioButton x:Name="FitFill" Style="{StaticResource Segment}" Content="Fill" GroupName="Fit" Checked="OnFitChanged" />
+                                                <RadioButton x:Name="FitStretch" Style="{StaticResource Segment}" Content="Stretch" GroupName="Fit" Checked="OnFitChanged" />
+                                                <RadioButton x:Name="FitActual" Style="{StaticResource Segment}" Content="1:1" GroupName="Fit" Checked="OnFitChanged" />
+                                            </StackPanel>
+                                        </Border>
+                                    </controls:SettingRow>
+                                    <controls:SettingRow Title="Rotation" Detail="For a phone held sideways, or a stand that holds it upside down.">
+                                        <ComboBox x:Name="RotationBox" MinWidth="170" SelectionChanged="OnRotationChanged">
+                                            <ComboBoxItem Content="Upright" />
+                                            <ComboBoxItem Content="90° clockwise" />
+                                            <ComboBoxItem Content="180°" />
+                                            <ComboBoxItem Content="90° counter-clockwise" />
+                                        </ComboBox>
+                                    </controls:SettingRow>
+                                    <controls:SettingRow Title="Mirror horizontally" Detail="Flips the picture left to right.">
+                                        <CheckBox x:Name="MirrorCheck" Style="{StaticResource Switch}" Click="OnMirrorChanged" />
+                                    </controls:SettingRow>
+                                    <controls:SettingRow x:Name="LatencyRow" Title="Smoothness"
+                                                         Detail="How much picture is held back to even out Wi-Fi. More is smoother; less is quicker.">
+                                        <Border Style="{StaticResource SegmentTrack}">
+                                            <StackPanel Orientation="Horizontal">
+                                                <RadioButton x:Name="LatencySmooth" Style="{StaticResource Segment}" Content="Smooth" GroupName="Latency" Checked="OnLatencyChanged" />
+                                                <RadioButton x:Name="LatencyBalanced" Style="{StaticResource Segment}" Content="Balanced" GroupName="Latency" Checked="OnLatencyChanged" />
+                                                <RadioButton x:Name="LatencyResponsive" Style="{StaticResource Segment}" Content="Quick" GroupName="Latency" Checked="OnLatencyChanged" />
+                                            </StackPanel>
+                                        </Border>
+                                    </controls:SettingRow>
+                                    <controls:SettingRow Title="Fit the window to the phone's screen" Detail="When a session starts, the window takes the phone's shape.">
+                                        <CheckBox x:Name="FitWindowCheck" Style="{StaticResource Switch}" Click="OnInstantSettingChanged" />
+                                    </controls:SettingRow>
+                                    <controls:SettingRow Title="Keep the window's shape while resizing" Detail="Dragging an edge keeps the picture's proportions.">
+                                        <CheckBox x:Name="LockAspectCheck" Style="{StaticResource Switch}" Click="OnInstantSettingChanged" />
+                                    </controls:SettingRow>
+                                    <controls:SettingRow Title="Keep the display awake while mirroring">
+                                        <CheckBox x:Name="KeepAwakeCheck" Style="{StaticResource Switch}" Click="OnInstantSettingChanged" />
+                                    </controls:SettingRow>
+                                    <controls:SettingRow Title="Statistics overlay" Detail="Frame rate, latency and buffer figures over the picture.">
+                                        <CheckBox x:Name="StatsCheck" Style="{StaticResource Switch}" Click="OnStatsSettingChanged" />
+                                    </controls:SettingRow>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- ============================== audio ============================== -->
+                            <TextBlock Text="AUDIO" Style="{StaticResource SectionTitle}" />
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <controls:SettingRow Title="Output device" IsFirst="True" Stacked="True"
+                                                         Detail="Where the phone's sound is played. Takes effect at once.">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <ComboBox x:Name="AudioDeviceBox" SelectionChanged="OnAudioDeviceChanged" HorizontalAlignment="Stretch" />
+                                            <Button Grid.Column="1" Style="{StaticResource SmallButton}" Content="&#xE72C;" FontFamily="{StaticResource IconFont}"
+                                                    ToolTip="Refresh the device list" Margin="8,0,0,0" Click="OnRefreshAudioDevices"
+                                                    AutomationProperties.Name="Refresh the device list" />
+                                        </Grid>
+                                    </controls:SettingRow>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- ============================== capture ============================== -->
+                            <TextBlock Text="SCREENSHOTS AND RECORDINGS" Style="{StaticResource SectionTitle}" />
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <controls:SettingRow Title="Save to" IsFirst="True" Stacked="True">
+                                        <Grid>
+                                            <Grid.ColumnDefinitions>
+                                                <ColumnDefinition Width="*" />
+                                                <ColumnDefinition Width="Auto" />
+                                                <ColumnDefinition Width="Auto" />
+                                            </Grid.ColumnDefinitions>
+                                            <TextBox x:Name="CaptureFolderBox" IsReadOnly="True" Foreground="{DynamicResource TextSecondary}" />
+                                            <Button Grid.Column="1" Style="{StaticResource SmallButton}" Content="Choose..." Margin="8,0,0,0" Click="OnChooseCaptureFolder" />
+                                            <Button Grid.Column="2" Style="{StaticResource SmallButton}" Content="Open" Margin="6,0,0,0" Click="OnOpenCaptureFolder" />
+                                        </Grid>
+                                    </controls:SettingRow>
+                                    <controls:SettingRow Title="Record the phone's audio" Detail="Recordings carry an AAC audio track alongside the picture.">
+                                        <CheckBox x:Name="RecordAudioCheck" Style="{StaticResource Switch}" Click="OnInstantSettingChanged" />
+                                    </controls:SettingRow>
+                                    <controls:SettingRow Title="Also copy screenshots to the clipboard">
+                                        <CheckBox x:Name="ClipboardCheck" Style="{StaticResource Switch}" Click="OnInstantSettingChanged" />
+                                    </controls:SettingRow>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- ============================== window ============================== -->
+                            <TextBlock Text="WINDOW AND SYSTEM" Style="{StaticResource SectionTitle}" />
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <controls:SettingRow Title="Keep on top of other windows" IsFirst="True">
+                                        <CheckBox x:Name="OnTopCheck" Style="{StaticResource Switch}" Click="OnOnTopSettingChanged" />
+                                    </controls:SettingRow>
+                                    <controls:SettingRow Title="Minimise to the notification area" Detail="The window leaves the taskbar; click the tray icon to bring it back.">
+                                        <CheckBox x:Name="MinimizeToTrayCheck" Style="{StaticResource Switch}" Click="OnInstantSettingChanged" />
+                                    </controls:SettingRow>
+                                    <controls:SettingRow Title="Close to the notification area" Detail="Closing hides the window; the receiver keeps running. Quit from the tray menu.">
+                                        <CheckBox x:Name="CloseToTrayCheck" Style="{StaticResource Switch}" Click="OnInstantSettingChanged" />
+                                    </controls:SettingRow>
+                                    <controls:SettingRow Title="Notify when a phone connects" Detail="Only while the window is hidden.">
+                                        <CheckBox x:Name="TrayNotifyCheck" Style="{StaticResource Switch}" Click="OnInstantSettingChanged" />
+                                    </controls:SettingRow>
+                                    <controls:SettingRow Title="Start when you sign in to Windows" Detail="Opens minimised, ready for the phone.">
+                                        <CheckBox x:Name="StartupCheck" Style="{StaticResource Switch}" Click="OnStartupSettingChanged" />
+                                    </controls:SettingRow>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- ============================== history ============================== -->
+                            <TextBlock Text="RECENT IPHONES" Style="{StaticResource SectionTitle}" />
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <TextBlock x:Name="NoRecentText" Text="No phone has mirrored to this PC yet." Style="{StaticResource Caption}" Margin="14,12" />
+                                    <ItemsControl x:Name="RecentList">
+                                        <ItemsControl.ItemTemplate>
+                                            <DataTemplate>
+                                                <Border Padding="14,10" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource BorderSubtle}">
+                                                    <Grid>
+                                                        <Grid.ColumnDefinitions>
+                                                            <ColumnDefinition Width="*" />
+                                                            <ColumnDefinition Width="Auto" />
+                                                        </Grid.ColumnDefinitions>
+                                                        <StackPanel>
+                                                            <TextBlock Text="{Binding Name}" Style="{StaticResource Body}" />
+                                                            <TextBlock Text="{Binding Summary}" Style="{StaticResource Caption}" Margin="0,3,0,0" />
+                                                        </StackPanel>
+                                                        <TextBlock Grid.Column="1" Text="{Binding LastSeen}" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="12,0,0,0" />
+                                                    </Grid>
+                                                </Border>
+                                            </DataTemplate>
+                                        </ItemsControl.ItemTemplate>
+                                    </ItemsControl>
+                                    <Border x:Name="RecentFooter" Padding="14,9" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource BorderSubtle}">
+                                        <Button Content="Clear history" Style="{StaticResource LinkButton}" HorizontalAlignment="Left" Click="OnClearHistory" />
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+
+                            <!-- ============================== about ============================== -->
+                            <TextBlock Text="THIS RECEIVER" Style="{StaticResource SectionTitle}" />
+                            <Border Style="{StaticResource Card}">
+                                <StackPanel>
+                                    <Border Padding="14,12">
+                                        <TextBlock x:Name="IdentityText" Style="{StaticResource Metric}" TextWrapping="Wrap" LineHeight="17" />
+                                    </Border>
+                                    <Border Padding="14,10" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource BorderSubtle}">
+                                        <WrapPanel>
+                                            <Button Content="Open log folder" Style="{StaticResource SmallButton}" Margin="0,0,8,0" Click="OnOpenLogFolder" />
+                                            <Button Content="Open data folder" Style="{StaticResource SmallButton}" Margin="0,0,8,0" Click="OnOpenDataFolder" />
+                                            <Button Content="Keyboard shortcuts" Style="{StaticResource SmallButton}" Margin="0,0,8,0" Click="OnShowHelp" />
+                                            <Button Content="Reset all settings" Style="{StaticResource DangerButton}" Click="OnResetSettings" />
+                                        </WrapPanel>
+                                    </Border>
+                                    <Border Padding="14,10" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource BorderSubtle}">
+                                        <TextBlock x:Name="AboutText" Style="{StaticResource Caption}" TextWrapping="Wrap" />
+                                    </Border>
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
+                    </ScrollViewer>
+                </Grid>
+            </Border>
+
+            <!-- Keyboard shortcuts, as an overlay card. -->
+            <Border x:Name="HelpPanel" Visibility="Collapsed" Background="{DynamicResource Surface}" Panel.ZIndex="35">
+                <ScrollViewer VerticalScrollBarVisibility="Auto" Padding="0,0,4,0">
+                    <Grid MinHeight="{Binding ViewportHeight, RelativeSource={RelativeSource AncestorType=ScrollViewer}}">
+                        <Border Style="{StaticResource Card}" MaxWidth="420" Margin="24" Padding="0,4" VerticalAlignment="Center">
+                            <StackPanel>
+                                <Grid Margin="18,12,12,8">
+                                    <TextBlock Text="Keyboard shortcuts" Style="{StaticResource Heading}" FontSize="18" VerticalAlignment="Center" />
+                                    <Button Style="{StaticResource IconButton}" Content="&#xE8BB;" FontSize="11" HorizontalAlignment="Right"
+                                            ToolTip="Close (Esc)" Click="OnCloseHelp" AutomationProperties.Name="Close shortcuts" />
+                                </Grid>
+                                <StackPanel x:Name="ShortcutList" Margin="18,4,18,12" />
+                            </StackPanel>
+                        </Border>
+                    </Grid>
+                </ScrollViewer>
+            </Border>
+
+            <!-- Activity log, docked over the bottom of the content area. -->
+            <Border x:Name="LogPanel" Visibility="Collapsed" VerticalAlignment="Bottom" Height="220" Panel.ZIndex="25"
+                    Background="{DynamicResource PanelBackground}" BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0">
+                <Grid>
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid Margin="14,7,8,4">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Text="Activity" Style="{StaticResource Caption}" FontWeight="SemiBold" VerticalAlignment="Center" />
+                        <Grid Grid.Column="1" Margin="12,0,6,0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" MaxWidth="170" />
+                            </Grid.ColumnDefinitions>
+                            <Border Style="{StaticResource SegmentTrack}" HorizontalAlignment="Left">
+                                <StackPanel Orientation="Horizontal">
+                                    <RadioButton x:Name="LogAll" Style="{StaticResource Segment}" Content="All" GroupName="LogLevel" IsChecked="True"
+                                                 MinWidth="40" Padding="8,2" FontSize="11.5" Checked="OnLogFilterChanged" />
+                                    <RadioButton x:Name="LogInfo" Style="{StaticResource Segment}" Content="Info" GroupName="LogLevel"
+                                                 MinWidth="40" Padding="8,2" FontSize="11.5" Checked="OnLogFilterChanged" />
+                                    <RadioButton x:Name="LogProblems" Style="{StaticResource Segment}" Content="Problems" GroupName="LogLevel"
+                                                 MinWidth="40" Padding="8,2" FontSize="11.5" Checked="OnLogFilterChanged" />
+                                </StackPanel>
+                            </Border>
+                            <TextBox x:Name="LogSearchBox" Grid.Column="1" MinWidth="40" Margin="8,0,0,0" Padding="8,3" FontSize="11.5"
+                                     TextChanged="OnLogFilterChanged" ToolTip="Filter the log" AutomationProperties.Name="Filter the log" />
+                        </Grid>
+                        <StackPanel Grid.Column="2" Orientation="Horizontal">
                             <Button Style="{StaticResource IconButton}" Content="&#xE8C8;" ToolTip="Copy"
-                                    Click="OnCopyLog" />
+                                    Click="OnCopyLog" AutomationProperties.Name="Copy the activity log" />
+                            <Button Style="{StaticResource IconButton}" Content="&#xE74E;" ToolTip="Save to a file"
+                                    Click="OnSaveLog" AutomationProperties.Name="Save the activity log" />
                             <Button Style="{StaticResource IconButton}" Content="&#xE74D;" ToolTip="Clear"
-                                    Click="OnClearLog" />
+                                    Click="OnClearLog" AutomationProperties.Name="Clear the activity log" />
+                            <Button Style="{StaticResource IconButton}" Content="&#xE8BB;" FontSize="11" ToolTip="Close"
+                                    Click="OnCloseLog" AutomationProperties.Name="Close the activity log" />
                         </StackPanel>
                     </Grid>
-                    <ScrollViewer x:Name="LogScroller" Grid.Row="1" VerticalScrollBarVisibility="Auto" Padding="14,0,8,10">
+                    <!-- Horizontal as well as vertical: trace lines are long, and clipping
+                         them made the log something to copy elsewhere before reading. -->
+                    <ScrollViewer x:Name="LogScroller" Grid.Row="1" VerticalScrollBarVisibility="Auto"
+                                  HorizontalScrollBarVisibility="Auto" Padding="14,0,8,10">
                         <TextBlock x:Name="LogText" Style="{StaticResource Metric}" FontSize="10.5"
                                    TextWrapping="NoWrap" LineHeight="15" />
                     </ScrollViewer>
                 </Grid>
             </Border>
+
+            <!-- A pill that appears for a moment with a one-line message: "iPhone connected". -->
+            <Border x:Name="Toast" Visibility="Collapsed" Opacity="0" HorizontalAlignment="Center" VerticalAlignment="Bottom"
+                    Margin="16,0,16,20" Background="{DynamicResource SurfaceRaised}" BorderBrush="{DynamicResource BorderBrush}"
+                    BorderThickness="1" CornerRadius="18" Padding="16,8" Panel.ZIndex="60" IsHitTestVisible="False">
+                <Border.RenderTransform>
+                    <TranslateTransform x:Name="ToastSlide" Y="8" />
+                </Border.RenderTransform>
+                <Border.Effect>
+                    <DropShadowEffect BlurRadius="16" ShadowDepth="3" Opacity="0.4" />
+                </Border.Effect>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock x:Name="ToastGlyph" FontFamily="{StaticResource IconFont}" FontSize="13" VerticalAlignment="Center"
+                               Margin="0,0,9,0" Foreground="{DynamicResource Accent}" />
+                    <TextBlock x:Name="ToastText" Style="{StaticResource Body}" VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                </StackPanel>
+            </Border>
         </Grid>
 
         <!-- =========================== status bar =========================== -->
-        <Border x:Name="StatusBar" Grid.Row="2" Background="{StaticResource SurfaceRaised}"
-                BorderBrush="{StaticResource BorderBrush}" BorderThickness="0,1,0,0">
-            <Grid Margin="14,6">
-                <TextBlock x:Name="StatusText" Style="{StaticResource Metric}" Text="Starting..." />
-                <TextBlock x:Name="MetricsText" Style="{StaticResource Metric}" HorizontalAlignment="Right" />
-            </Grid>
+        <Border x:Name="StatusBar" Grid.Row="2" Background="{DynamicResource SurfaceRaised}"
+                BorderBrush="{DynamicResource BorderBrush}" BorderThickness="0,1,0,0" Panel.ZIndex="40">
+            <!-- Side by side, never overlapping: the metrics line is long, and a narrow window
+                 used to draw it straight over the status text. The metrics are docked first so
+                 they claim their room before the status text takes what is left, and both end
+                 in an ellipsis rather than running off the edge of a window as narrow as a
+                 phone. -->
+            <DockPanel Margin="14,0" Height="28">
+                <TextBlock x:Name="MetricsText" DockPanel.Dock="Right" Style="{StaticResource Metric}"
+                           Margin="14,0,0,0" TextTrimming="CharacterEllipsis" />
+                <Button x:Name="StatusLink" DockPanel.Dock="Right" Style="{StaticResource LinkButton}" Content="Show in folder"
+                        Visibility="Collapsed" Margin="8,0,0,0" FontSize="11.5" Click="OnStatusLink" />
+                <TextBlock x:Name="StatusText" Style="{StaticResource Metric}"
+                           Text="Starting..." TextTrimming="CharacterEllipsis" />
+            </DockPanel>
         </Border>
     </Grid>
 </Window>

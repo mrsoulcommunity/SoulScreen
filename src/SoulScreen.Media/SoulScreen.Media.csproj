@@ -9,6 +9,12 @@
     <PackageReference Include="NAudio.Wasapi" Version="2.2.1" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Frame pacing is tested by feeding it a clock and synthetic pictures, which needs the
+         internal factory that only the decoder is otherwise allowed to call. -->
+    <InternalsVisibleTo Include="SoulScreen.Tests" />
+  </ItemGroup>
+
   <PropertyGroup>
     <TargetFramework>net8.0</TargetFramework>
     <ImplicitUsings>enable</ImplicitUsings>

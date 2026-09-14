@@ -13,6 +13,25 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>
+    <!-- For the notification-area icon only; nothing else is drawn with WinForms. -->
+    <UseWindowsForms>true</UseWindowsForms>
+    <ApplicationIcon>Assets\SoulScreen.ico</ApplicationIcon>
+    <Version>1.1.0</Version>
+    <AssemblyTitle>SoulScreen</AssemblyTitle>
+    <Product>SoulScreen</Product>
+    <Description>Mirror an iPhone screen onto Windows.</Description>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- WinForms brings global usings that collide with WPF's Size, Point, Color and
+         Application; the one file that needs WinForms names it explicitly. -->
+    <Using Remove="System.Windows.Forms" />
+    <Using Remove="System.Drawing" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Embedded so the tray icon can be loaded at runtime without reading the exe. -->
+    <Resource Include="Assets\SoulScreen.ico" />
+  </ItemGroup>
 
 </Project>
