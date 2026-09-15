@@ -5,6 +5,7 @@ using System.Windows;
 using System.Windows.Controls;
 using Microsoft.Win32;
 using SoulScreen.AirPlay.FairPlay;
+using SoulScreen.App.Logic;
 using SoulScreen.Core.Logging;
 using SoulScreen.Media;
 
@@ -96,7 +97,15 @@ public partial class MainWindow
             LockAspectCheck.IsChecked = _settings.LockAspectRatio;
             KeepAwakeCheck.IsChecked = _settings.KeepDisplayAwake;
             StatsCheck.IsChecked = _settings.ShowStats;
+            PerformanceGraphCheck.IsChecked = _settings.ShowPerformanceGraph;
+            PerformanceGraphRow.IsEnabled = _settings.ShowStats;
             RoundedCornersCheck.IsChecked = _settings.RoundedCorners;
+
+            SyncCaptureBudget();
+            AnimationsSystem.IsChecked = _settings.Animations == MotionPreference.FollowWindows;
+            AnimationsOn.IsChecked = _settings.Animations == MotionPreference.AlwaysOn;
+            AnimationsOff.IsChecked = _settings.Animations == MotionPreference.AlwaysOff;
+            PopulateDisplayChoices();
 
             PopulateAudioDevices();
 
@@ -317,6 +326,32 @@ public partial class MainWindow
         StatsButton.IsChecked = StatsCheck.IsChecked == true;
     }
 
+    private void OnPerformanceGraphChanged(object sender, RoutedEventArgs e)
+    {
+        if (_populatingSettings) return;
+        SetShowPerformanceGraph(PerformanceGraphCheck.IsChecked == true);
+    }
+
+    private void OnCaptureBudgetChanged(object sender, RoutedEventArgs e)
+    {
+        // BudgetOff is marked checked in the XAML, so this fires while the window is still
+        // being built - before Budget5 and its siblings exist. The real state is applied
+        // from the settings when the panel opens.
+        if (Budget5 is null || _populatingSettings) return;
+        long budget = Budget5.IsChecked == true ? 5L * 1024 * 1024 * 1024
+            : Budget20.IsChecked == true ? 20L * 1024 * 1024 * 1024
+            : Budget50.IsChecked == true ? 50L * 1024 * 1024 * 1024
+            : 0;
+        if (_settings.CaptureBudgetBytes == budget) return;
+        _settings.CaptureBudgetBytes = budget;
+        _settings.Save();
+        if (budget > 0)
+        {
+            ShowToast($"Keeping captures under {CaptureNaming.FormatSize(budget)}", "\uEDD5");
+            EnforceCaptureBudget();
+        }
+    }
+
     private void OnOnTopSettingChanged(object sender, RoutedEventArgs e)
     {
         if (_populatingSettings) return;
@@ -335,6 +370,107 @@ public partial class MainWindow
         }
         _settings.LaunchAtStartup = wanted;
         _settings.Save();
+    }
+
+    // ------------------------------------------------------------- capture budget
+
+    /// <summary>Syncs the budget segment with the setting, including a hand-edited
+    /// budget no preset matches - the segment then shows Off and a hint names the file.</summary>
+    private void SyncCaptureBudget()
+    {
+        BudgetOff.IsChecked = _settings.CaptureBudgetBytes == 0;
+        Budget5.IsChecked = _settings.CaptureBudgetBytes == 5L * 1024 * 1024 * 1024;
+        Budget20.IsChecked = _settings.CaptureBudgetBytes == 20L * 1024 * 1024 * 1024;
+        Budget50.IsChecked = _settings.CaptureBudgetBytes == 50L * 1024 * 1024 * 1024;
+        BudgetCustomHint.Visibility = _settings.CaptureBudgetBytes > 0
+            && Budget5.IsChecked != true && Budget20.IsChecked != true && Budget50.IsChecked != true
+            ? Visibility.Visible : Visibility.Collapsed;
+    }
+
+    // ---------------------------------------------------------------- animations
+
+    private void OnAnimationsChanged(object sender, RoutedEventArgs e)
+    {
+        if (AnimationsOn is null || _populatingSettings) return;
+        var preference = AnimationsOn.IsChecked == true ? MotionPreference.AlwaysOn
+            : AnimationsOff.IsChecked == true ? MotionPreference.AlwaysOff
+            : MotionPreference.FollowWindows;
+        if (_settings.Animations == preference) return;
+        _settings.Animations = preference;
+        _settings.Save();
+        ShowToast(preference switch
+        {
+            MotionPreference.AlwaysOn => "Animations will always play",
+            MotionPreference.AlwaysOff => "Animations are switched off",
+            _ => "Animations follow Windows",
+        }, "\uE785");
+    }
+
+    // ----------------------------------------------------------------- displays
+
+    /// <summary>The display picker lists this PC's real displays; the setting stores the
+    /// chosen entry's key. Rebuilt when settings open and when displays change.</summary>
+    private void PopulateDisplayChoices()
+    {
+        var displays = DisplayService.ListChoices(this);
+        var items = new List<string>
+        {
+            displays.Count < 2 ? "This display" : "Where it is now",
+            "Primary display",
+        };
+        for (var i = 0; i < displays.Count; i++)
+        {
+            var d = displays[i];
+            items.Add($"Display {i + 1}{(d.IsPrimary ? " (primary)" : "")} - {(int)d.WorkArea.Width}x{(int)d.WorkArea.Height}");
+        }
+
+        _populatingSettings = true;
+        try
+        {
+            DisplayBox.ItemsSource = items;
+            var choice = _settings.TargetDisplay;
+            var index = choice == Logic.DisplayLayout.PrimaryDisplay ? 1
+                : int.TryParse(choice, out var n) && n >= 0 && n < displays.Count ? 2 + n
+                : 0;
+            DisplayBox.SelectedIndex = index;
+            // One display means one place to be; the choice is kept for when there are two.
+            DisplayRow.IsEnabled = displays.Count > 1;
+        }
+        finally
+        {
+            _populatingSettings = false;
+        }
+        _displayChoices = displays;
+    }
+
+    private IReadOnlyList<Logic.DisplayChoice> _displayChoices = [];
+
+    private void OnDisplayChoiceChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_populatingSettings || DisplayBox.SelectedIndex < 0) return;
+        var index = DisplayBox.SelectedIndex;
+        var choice = index == 1 ? Logic.DisplayLayout.PrimaryDisplay
+            : index >= 2 ? (index - 2).ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : Logic.DisplayLayout.CurrentDisplay;
+        if (_settings.TargetDisplay == choice) return;
+        _settings.TargetDisplay = choice;
+        _settings.Save();
+        if (index >= 2 && _displayChoices.Count > index - 2)
+        {
+            DisplayService.MoveTo(this, _displayChoices[index - 2]);
+            ShowToast("Moved to the chosen display", "\uE7F4");
+        }
+        else if (index == 1)
+        {
+            MoveWindowToResolvedDisplay();
+        }
+    }
+
+    /// <summary>Applies the display preference now, where it names a display to move to.</summary>
+    private void MoveWindowToResolvedDisplay()
+    {
+        var resolved = Logic.DisplayLayout.Resolve(_settings.TargetDisplay, _displayChoices, DisplayService.BoundsOf(this));
+        if (resolved is { } display) DisplayService.MoveTo(this, display);
     }
 
     // ----------------------------------------------------------------- audio
@@ -545,6 +681,87 @@ public partial class MainWindow
             box.ClearValue(StyleProperty);
     }
 
+    // ------------------------------------------------------- export and import
+
+    /// <summary>Writes the settings to a JSON file of the same shape settings.json uses.
+    /// A backup to move between machines, or to keep before an experiment.</summary>
+    private void OnExportSettings(object sender, RoutedEventArgs e)
+    {
+        var dialog = new SaveFileDialog
+        {
+            Title = "Export settings",
+            Filter = "SoulScreen settings (*.json)|*.json",
+            FileName = "SoulScreen-settings.json",
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        try
+        {
+            File.WriteAllText(dialog.FileName, System.Text.Json.JsonSerializer.Serialize(_settings,
+                new System.Text.Json.JsonSerializerOptions { WriteIndented = true, Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } }));
+            ShowToast("Settings exported", "\uE898");
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"could not export settings to {dialog.FileName}", ex);
+            ShowToast("The settings could not be exported", "\uE7BA");
+        }
+    }
+
+    /// <summary>Reads settings back from an export. Preferences are taken; the things
+    /// that name this machine - its history, its trust decisions, its window place - are
+    /// kept, and a file that is not settings at all changes nothing.</summary>
+    private async void OnImportSettings(object sender, RoutedEventArgs e)
+    {
+        var dialog = new OpenFileDialog
+        {
+            Title = "Import settings",
+            Filter = "SoulScreen settings (*.json)|*.json|All files (*.*)|*.*",
+            CheckFileExists = true,
+        };
+        if (dialog.ShowDialog(this) != true) return;
+
+        AppSettings? imported;
+        try
+        {
+            imported = System.Text.Json.JsonSerializer.Deserialize<AppSettings>(File.ReadAllText(dialog.FileName),
+                new System.Text.Json.JsonSerializerOptions { PropertyNameCaseInsensitive = true, Converters = { new System.Text.Json.Serialization.JsonStringEnumConverter() } });
+        }
+        catch (Exception ex)
+        {
+            _log.Warn($"could not read settings from {dialog.FileName}", ex);
+            imported = null;
+        }
+
+        if (imported is null)
+        {
+            ShowToast("That file is not a SoulScreen settings export", "\uE7BA");
+            return;
+        }
+
+        var changed = SettingsTransfer.ApplyImported(_settings, imported);
+        _settings.Normalise();
+        _settings.Save();
+
+        // Everything the panels apply piecewise is applied here, once.
+        ThemeManager.Apply(_settings.Theme, _settings.Accent, animate: true);
+        ApplySettingsToChrome();
+        ApplyPictureSettings();
+        ApplyGlobalHotkeys(announce: false);
+        SyncMarkupChoices();
+        ApplyMarkupTool();
+        UpdatePictureCorners();
+        UpdateTray();
+        if (Log.MinimumLevel != (_settings.TraceProtocol ? LogLevel.Trace : LogLevel.Debug))
+            Log.MinimumLevel = _settings.TraceProtocol ? LogLevel.Trace : LogLevel.Debug;
+        PopulateSettingsForm();
+        ShowToast(changed.Count == 0 ? "Nothing to import - the settings already match"
+            : $"Imported {changed.Count} setting{(changed.Count == 1 ? "" : "s")}", "\uE898");
+
+        // Receiver-affecting fields may have arrived: restart it if it was running.
+        await RestartReceiverAsync();
+    }
+
     // ---------------------------------------------------------------- history
 
     private void RefreshRecentList()
@@ -555,7 +772,13 @@ public partial class MainWindow
             $"{(d.Model is null ? "" : d.Model + " · ")}{d.SessionCount} session{(d.SessionCount == 1 ? "" : "s")} · {FormatDuration(TimeSpan.FromSeconds(d.TotalSeconds))}",
             FormatRelative(d.LastSeenUtc))).ToList();
         NoRecentText.Visibility = devices.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
+        RecentSummary.Visibility = devices.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         RecentFooter.Visibility = devices.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
+
+        // What the history adds up to, across every phone this PC has mirrored.
+        RecentSummary.Text = devices.Count == 0 ? ""
+            : $"{devices.Count} phone{(devices.Count == 1 ? "" : "s")} · " +
+              $"{devices.Sum(d => d.SessionCount)} sessions · {FormatDuration(TimeSpan.FromSeconds(devices.Sum(d => d.TotalSeconds)))} mirrored in all";
     }
 
     private static string FormatRelative(DateTime utc)

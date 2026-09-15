@@ -214,6 +214,14 @@
                         <MenuItem Header="Save screenshot" InputGestureText="Ctrl+S" Click="OnSnapshot" />
                         <MenuItem Header="Copy screenshot" InputGestureText="Ctrl+Shift+C" Click="OnCopySnapshot" />
                         <MenuItem x:Name="MenuRecord" Header="Record to MP4" InputGestureText="Ctrl+R" Click="OnMenuRecord" />
+                        <MenuItem x:Name="MenuTimedStop" Header="Stop recording in…" Visibility="Collapsed">
+                            <MenuItem Header="1 minute" Tag="1" Click="OnMenuRecordTimed" />
+                            <MenuItem Header="5 minutes" Tag="5" Click="OnMenuRecordTimed" />
+                            <MenuItem Header="10 minutes" Tag="10" Click="OnMenuRecordTimed" />
+                            <MenuItem Header="30 minutes" Tag="30" Click="OnMenuRecordTimed" />
+                            <Separator />
+                            <MenuItem x:Name="MenuCancelTimedStop" Header="Cancel the timed stop" Click="OnMenuCancelTimedStop" />
+                        </MenuItem>
                         <MenuItem Header="Show captures" InputGestureText="Ctrl+G" Click="OnMenuCaptures" />
                         <Separator />
                         <MenuItem x:Name="MenuMute" Header="Mute" InputGestureText="Ctrl+M" Click="OnMenuMute" />
@@ -233,27 +241,36 @@
                     Margin="14,14,0,0" Background="{StaticResource HudBackground}" BorderBrush="{StaticResource HudBorder}"
                     BorderThickness="1" CornerRadius="10" Padding="13,10" Panel.ZIndex="20" IsHitTestVisible="False"
                     TextElement.Foreground="{StaticResource HudText}">
-                <Grid x:Name="StatsGrid">
-                    <Grid.ColumnDefinitions>
-                        <ColumnDefinition Width="Auto" />
-                        <ColumnDefinition Width="Auto" />
-                    </Grid.ColumnDefinitions>
-                    <Grid.Resources>
-                        <Style x:Key="HudLabel" TargetType="TextBlock">
-                            <Setter Property="Foreground" Value="{StaticResource HudTextDim}" />
-                            <Setter Property="FontFamily" Value="{StaticResource TextFont}" />
-                            <Setter Property="FontSize" Value="11.5" />
-                            <Setter Property="Margin" Value="0,1,16,1" />
-                        </Style>
-                        <Style x:Key="HudValue" TargetType="TextBlock">
-                            <Setter Property="Foreground" Value="{StaticResource HudText}" />
-                            <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
-                            <Setter Property="FontSize" Value="11.5" />
-                            <Setter Property="Margin" Value="0,1,0,1" />
-                            <Setter Property="HorizontalAlignment" Value="Right" />
-                        </Style>
-                    </Grid.Resources>
-                </Grid>
+                <StackPanel>
+                    <Grid x:Name="StatsGrid">
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <Grid.Resources>
+                            <Style x:Key="HudLabel" TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="{StaticResource HudTextDim}" />
+                                <Setter Property="FontFamily" Value="{StaticResource TextFont}" />
+                                <Setter Property="FontSize" Value="11.5" />
+                                <Setter Property="Margin" Value="0,1,16,1" />
+                            </Style>
+                            <Style x:Key="HudValue" TargetType="TextBlock">
+                                <Setter Property="Foreground" Value="{StaticResource HudText}" />
+                                <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+                                <Setter Property="FontSize" Value="11.5" />
+                                <Setter Property="Margin" Value="0,1,0,1" />
+                                <Setter Property="HorizontalAlignment" Value="Right" />
+                            </Style>
+                        </Grid.Resources>
+                    </Grid>
+                    <!-- The last minute and a half of frame rate, as a shape. Hidden unless the
+                         performance graph is switched on, and drawn only while a session runs. -->
+                    <Border x:Name="PerformanceGraph" Visibility="Collapsed" Margin="0,8,0,1" Width="190" Height="40"
+                            HorizontalAlignment="Stretch" IsHitTestVisible="False">
+                        <Path x:Name="PerformanceGraphLine" Stroke="{StaticResource HudText}" StrokeThickness="1.5"
+                              StrokeLineJoin="Round" StrokeDashCap="Round" Opacity="0.9" />
+                    </Border>
+                </StackPanel>
             </Border>
 
             <!-- Badges over the top of the picture for what is happening to it: the recording
@@ -718,6 +735,10 @@
                                         <controls:SettingRow Title="Statistics overlay" Detail="Frame rate, latency and buffer figures over the picture.">
                                             <CheckBox x:Name="StatsCheck" Style="{StaticResource Switch}" Click="OnStatsSettingChanged" />
                                         </controls:SettingRow>
+                                        <controls:SettingRow x:Name="PerformanceGraphRow" Title="Performance graph" IsEnabled="False"
+                                                             Detail="A minute and a half of frame rate under the figures, so a stutter is seen as a shape.">
+                                            <CheckBox x:Name="PerformanceGraphCheck" Style="{StaticResource Switch}" Click="OnPerformanceGraphChanged" />
+                                        </controls:SettingRow>
                                     </StackPanel>
                                 </Border>
 
@@ -817,6 +838,30 @@
                                         <controls:SettingRow Title="Also copy screenshots to the clipboard">
                                             <CheckBox x:Name="ClipboardCheck" Style="{StaticResource Switch}" Click="OnInstantSettingChanged" />
                                         </controls:SettingRow>
+                                        <controls:SettingRow Title="Keep captures under" Stacked="True"
+                                                             Detail="Oldest captures are moved to the Recycle Bin when the folder grows past this. Off by default.">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="Auto" />
+                                                    <ColumnDefinition Width="*" />
+                                                </Grid.ColumnDefinitions>
+                                                <Border Style="{StaticResource SegmentTrack}" HorizontalAlignment="Left">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <RadioButton x:Name="BudgetOff" Style="{StaticResource Segment}" Content="Off" GroupName="CaptureBudget"
+                                                                     IsChecked="True" MinWidth="44" Padding="9,3" Checked="OnCaptureBudgetChanged" />
+                                                        <RadioButton x:Name="Budget5" Style="{StaticResource Segment}" Content="5 GB" GroupName="CaptureBudget"
+                                                                     MinWidth="44" Padding="9,3" Checked="OnCaptureBudgetChanged" />
+                                                        <RadioButton x:Name="Budget20" Style="{StaticResource Segment}" Content="20 GB" GroupName="CaptureBudget"
+                                                                     MinWidth="44" Padding="9,3" Checked="OnCaptureBudgetChanged" />
+                                                        <RadioButton x:Name="Budget50" Style="{StaticResource Segment}" Content="50 GB" GroupName="CaptureBudget"
+                                                                     MinWidth="44" Padding="9,3" Checked="OnCaptureBudgetChanged" />
+                                                    </StackPanel>
+                                                </Border>
+                                                <TextBlock x:Name="BudgetCustomHint" Grid.Column="1" Style="{StaticResource Caption}" Margin="10,0,0,0"
+                                                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
+                                                           ToolTip="Set in settings.json as CaptureBudgetBytes - a whole number of bytes, at least 256 MB." />
+                                            </Grid>
+                                        </controls:SettingRow>
                                     </StackPanel>
                                 </Border>
 
@@ -843,6 +888,19 @@
                                                              Detail="Ctrl+Alt+Shift with S saves a screenshot, R records, M opens the mini player and O brings SoulScreen forward - whichever app is in front.">
                                             <CheckBox x:Name="GlobalHotkeysCheck" Style="{StaticResource Switch}" Click="OnGlobalHotkeysChanged" />
                                         </controls:SettingRow>
+                                        <controls:SettingRow Title="Animations" Detail="Follow Windows, always animate, or keep every transition still - for recording or presenting.">
+                                            <Border Style="{StaticResource SegmentTrack}">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <RadioButton x:Name="AnimationsSystem" Style="{StaticResource Segment}" Content="System" GroupName="Animations" Checked="OnAnimationsChanged" />
+                                                    <RadioButton x:Name="AnimationsOn" Style="{StaticResource Segment}" Content="On" GroupName="Animations" Checked="OnAnimationsChanged" />
+                                                    <RadioButton x:Name="AnimationsOff" Style="{StaticResource Segment}" Content="Off" GroupName="Animations" Checked="OnAnimationsChanged" />
+                                                </StackPanel>
+                                            </Border>
+                                        </controls:SettingRow>
+                                        <controls:SettingRow x:Name="DisplayRow" Title="Show this window on" Stacked="True"
+                                                             Detail="Where a session puts the window. The list is this PC's displays, as Windows reports them.">
+                                            <ComboBox x:Name="DisplayBox" SelectionChanged="OnDisplayChoiceChanged" HorizontalAlignment="Left" MinWidth="220" />
+                                        </controls:SettingRow>
                                     </StackPanel>
                                 </Border>
 
@@ -850,6 +908,8 @@
                                 <TextBlock Text="RECENT IPHONES" Style="{StaticResource SectionTitle}" />
                                 <Border Style="{StaticResource Card}">
                                     <StackPanel>
+                                        <TextBlock x:Name="RecentSummary" Style="{StaticResource Caption}" Margin="14,11,14,0" TextTrimming="CharacterEllipsis"
+                                                   Visibility="Collapsed" />
                                         <TextBlock x:Name="NoRecentText" Text="No phone has mirrored to this PC yet." Style="{StaticResource Caption}" Margin="14,12" />
                                         <ItemsControl x:Name="RecentList">
                                             <ItemsControl.ItemTemplate>
@@ -892,6 +952,8 @@
                                             <WrapPanel>
                                                 <Button Content="Open log folder" Style="{StaticResource SmallButton}" Margin="0,0,8,6" Click="OnOpenLogFolder" />
                                                 <Button Content="Open data folder" Style="{StaticResource SmallButton}" Margin="0,0,8,6" Click="OnOpenDataFolder" />
+                                                <Button Content="Export settings…" Style="{StaticResource SmallButton}" Margin="0,0,8,6" Click="OnExportSettings" />
+                                                <Button Content="Import settings…" Style="{StaticResource SmallButton}" Margin="0,0,8,6" Click="OnImportSettings" />
                                                 <Button Content="Check the connection" Style="{StaticResource SmallButton}" Margin="0,0,8,6" Click="OnShowDoctor" />
                                                 <Button Content="Welcome screen" Style="{StaticResource SmallButton}" Margin="0,0,8,6" Click="OnShowWelcome" />
                                                 <Button Content="Keyboard shortcuts" Style="{StaticResource SmallButton}" Margin="0,0,8,6" Click="OnShowHelp" />
@@ -953,6 +1015,20 @@
                                              MinWidth="40" Padding="9,3" Checked="OnCaptureFilterChanged" />
                             </StackPanel>
                         </Border>
+                        <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="10,0,10,0" HorizontalAlignment="Center">
+                            <TextBox x:Name="CapturesSearchBox" Width="180" Style="{StaticResource SearchBox}" Tag="Search captures"
+                                     TextChanged="OnCapturesSearchChanged" AutomationProperties.Name="Search captures" />
+                            <Border Style="{StaticResource SegmentTrack}" Margin="8,0,0,0">
+                                <StackPanel Orientation="Horizontal">
+                                    <RadioButton x:Name="CapturesSortNewest" Style="{StaticResource Segment}" Content="Newest" GroupName="CaptureSort"
+                                                 IsChecked="True" MinWidth="40" Padding="8,3" Checked="OnCaptureSortChanged" />
+                                    <RadioButton x:Name="CapturesSortOldest" Style="{StaticResource Segment}" Content="Oldest" GroupName="CaptureSort"
+                                                 MinWidth="40" Padding="8,3" Checked="OnCaptureSortChanged" />
+                                    <RadioButton x:Name="CapturesSortLargest" Style="{StaticResource Segment}" Content="Largest" GroupName="CaptureSort"
+                                                 MinWidth="40" Padding="8,3" Checked="OnCaptureSortChanged" />
+                                </StackPanel>
+                            </Border>
+                        </StackPanel>
                         <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="8,0,0,0">
                             <Button Style="{StaticResource IconButton}" Content="&#xE72C;" ToolTip="Refresh"
                                     Click="OnRefreshCaptures" AutomationProperties.Name="Refresh captures" />

@@ -207,6 +207,13 @@ public partial class MainWindow
                 var recording = RecordButton.IsChecked == true;
                 yield return new(recording ? "Stop recording" : "Start recording", "Capture",
                     recording ? "" : "", "Ctrl+R", () => RecordButton.IsChecked = !recording, "video mp4 record");
+                var armed = _recordingTimer is { IsArmed: true };
+                yield return new(armed ? "Cancel the timed stop" : "Stop recording in 5 minutes", "Capture",
+                    "", null, () =>
+                    {
+                        if (armed) OnMenuCancelTimedStop(this, new RoutedEventArgs());
+                        else OnMenuRecordTimed(new System.Windows.Controls.MenuItem { Tag = "5" }, new RoutedEventArgs());
+                    }, "timed stop countdown minutes limit");
             }
 
             if (_settings.VideoFit != VideoFit.Fit)
@@ -263,6 +270,24 @@ public partial class MainWindow
         yield return new(LogPanel.Visibility == Visibility.Visible ? "Hide the activity log" : "Activity log", "Go to", "", "Ctrl+L",
             () => LogButton.IsChecked = LogButton.IsChecked != true, "log debug trace diagnostics");
         yield return new("Keyboard shortcuts", "Go to", "", "F1", ToggleHelp, "keys help");
+        yield return new(_settings.ShowPerformanceGraph ? "Hide the performance graph" : "Show the performance graph", "Go to", "",
+            null, () => SetShowPerformanceGraph(!_settings.ShowPerformanceGraph), "sparkline fps graph overlay statistics performance");
+
+        if (_displayChoices.Count > 1)
+        {
+            for (var i = 0; i < _displayChoices.Count; i++)
+            {
+                var display = _displayChoices[i];
+                yield return new($"Move to display {i + 1}{(display.IsPrimary ? " (primary)" : "")}", "Window", "", null,
+                    () =>
+                    {
+                        _settings.TargetDisplay = i.ToString(System.Globalization.CultureInfo.InvariantCulture);
+                        _settings.Save();
+                        DisplayService.MoveTo(this, display);
+                        if (SettingsPanel.Visibility == Visibility.Visible) PopulateDisplayChoices();
+                    }, "display monitor screen second");
+            }
+        }
         yield return new("Check the connection", "Go to", "\uE930", null, ShowDoctor,
             "troubleshoot doctor diagnose firewall network help cannot find missing not showing");
         yield return new("Welcome screen", "Go to", "\uE95A", null, ShowWelcome, "introduction tour getting started help");
@@ -284,6 +309,23 @@ public partial class MainWindow
                 "privacy unblock remove trust list devices");
         yield return new(_settings.GlobalHotkeys ? "Stop the shortcuts in other apps" : "Use shortcuts from any app", "Window", "\uE765", null,
             () => SetGlobalHotkeys(!_settings.GlobalHotkeys), "global hotkeys keyboard system wide background");
+
+        yield return new(_settings.Animations switch
+        {
+            MotionPreference.AlwaysOn => "Stop always animating",
+            MotionPreference.AlwaysOff => "Turn animations back on",
+            _ => "Switch animations off",
+        }, "Appearance", "\uE785", null, () =>
+        {
+            _settings.Animations = _settings.Animations switch
+            {
+                MotionPreference.AlwaysOn => MotionPreference.FollowWindows,
+                MotionPreference.AlwaysOff => MotionPreference.AlwaysOn,
+                _ => MotionPreference.AlwaysOff,
+            };
+            _settings.Save();
+            if (SettingsPanel.Visibility == Visibility.Visible) PopulateSettingsForm();
+        }, "animations motion reduce transitions still");
 
         foreach (var theme in Enum.GetValues<AppTheme>())
         {

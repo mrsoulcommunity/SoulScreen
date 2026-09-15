@@ -73,6 +73,12 @@ public partial class MainWindow
     {
         CaptureList.Tag = 170.0;
         CapturesScroller.SizeChanged += (_, _) => UpdateCaptureTileWidth();
+        // A gallery opened from the toolbar, the palette or the tray starts from everything,
+        // so a search left behind does not hide captures from a fresh look.
+        CapturesPanel.IsVisibleChanged += (_, _) =>
+        {
+            if (!CapturesPanel.IsVisible && CapturesSearchBox.Text.Length > 0) CapturesSearchBox.Text = string.Empty;
+        };
     }
 
     // ------------------------------------------------------------------ opening
@@ -117,6 +123,24 @@ public partial class MainWindow
         if (CaptureList is null) return;
         ApplyCaptureFilter();
     }
+
+    private void OnCapturesSearchChanged(object sender, TextChangedEventArgs e)
+    {
+        if (CaptureList is null) return; // still building the window
+        ApplyCaptureFilter();
+    }
+
+    private void OnCaptureSortChanged(object sender, RoutedEventArgs e)
+    {
+        if (CaptureList is null) return;
+        ApplyCaptureFilter();
+    }
+
+    /// <summary>The order the sort control is showing.</summary>
+    private CaptureSortOrder CaptureSort =>
+        CapturesSortOldest.IsChecked == true ? CaptureSortOrder.OldestFirst
+        : CapturesSortLargest.IsChecked == true ? CaptureSortOrder.LargestFirst
+        : CaptureSortOrder.NewestFirst;
 
     /// <summary>Refreshes the gallery if it is open; called whenever a capture is saved.</summary>
     private void RefreshCapturesIfOpen()
@@ -184,7 +208,11 @@ public partial class MainWindow
         var shown = CapturesShots.IsChecked == true ? complete.Where(item => item.Kind == CaptureKind.Screenshot)
             : CapturesVideos.IsChecked == true ? complete.Where(item => item.Kind == CaptureKind.Recording)
             : complete;
-        var list = shown.Take(MaxCapturesShown).ToList();
+
+        var query = CapturesSearchBox.Text;
+        var matching = string.IsNullOrWhiteSpace(query) ? shown.ToList() : shown.Where(item => CaptureFilter.Matches(item.FileName, query)).ToList();
+        CaptureFilter.Sort(matching, item => item.ModifiedLocal, item => item.Size, CaptureSort);
+        var list = matching.Take(MaxCapturesShown).ToList();
 
         var recordingTile = (Brush)FindResource("RecordingTile");
         foreach (var item in list)
@@ -192,15 +220,24 @@ public partial class MainWindow
 
         CaptureList.ItemsSource = list;
 
+        // What the folder holds, what the search found, and where it all is.
+        var totalBytes = complete.Sum(item => item.Size);
+        var foundText = query.Length == 0
+            ? null
+            : $" · {Plural(list.Count, "match")} for “{query.Trim()}”";
         CapturesSummary.Text = complete.Count == 0
             ? _settings.CaptureDirectory
-            : $"{Plural(screenshots, "screenshot")} · {Plural(recordings, "recording")} · {_settings.CaptureDirectory}";
+            : $"{Plural(screenshots, "screenshot")} · {Plural(recordings, "recording")} · {CaptureFilter.DescribeCount(complete.Count, totalBytes)}{foundText} · {_settings.CaptureDirectory}";
         CapturesSummary.ToolTip = _settings.CaptureDirectory;
 
         CapturesEmpty.Visibility = list.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
-        CapturesEmptyTitle.Text = CapturesShots.IsChecked == true ? "No screenshots yet"
+        CapturesEmptyTitle.Text = query.Length > 0 && complete.Count > 0 ? "Nothing matches that search"
+            : CapturesShots.IsChecked == true ? "No screenshots yet"
             : CapturesVideos.IsChecked == true ? "No recordings yet"
             : "No captures yet";
+        CapturesEmptyDetail.Text = query.Length > 0 && complete.Count > 0
+            ? "Try fewer words, or clear the search to see everything."
+            : "Screenshots (Ctrl+S) and recordings (Ctrl+R) of a mirrored phone are kept here.";
     }
 
     private static string Plural(int count, string noun) => $"{count} {noun}{(count == 1 ? "" : "s")}";
@@ -444,5 +481,63 @@ public partial class MainWindow
         ApplyCaptureFilter();
         ShowToast("Moved to the Recycle Bin", "");
         return true;
+    }
+
+    // ------------------------------------------------------------------ budget
+
+    /// <summary>Runs after each capture is saved: if the folder has grown past the budget,
+    /// the oldest captures go to the Recycle Bin to bring it back under.</summary>
+    private void EnforceCaptureBudget()
+    {
+        var budget = _settings.CaptureBudgetBytes;
+        if (budget <= 0) return;
+
+        try
+        {
+            var candidates = new List<CaptureBudget.Candidate>();
+            foreach (var path in Directory.EnumerateFiles(_settings.CaptureDirectory, CaptureNaming.Prefix + "*"))
+            {
+                if (CaptureNaming.KindOf(path) is not { }) continue;
+                try
+                {
+                    var info = new FileInfo(path);
+                    if (!info.Exists) continue;
+                    candidates.Add(new CaptureBudget.Candidate(path, info.Length, info.LastWriteTimeUtc,
+                        IsBeingRecorded: string.Equals(path, _pipeline?.RecordingPath, StringComparison.OrdinalIgnoreCase)));
+                }
+                catch (IOException) { }
+                catch (UnauthorizedAccessException) { }
+            }
+
+            var plan = CaptureBudget.PlanRemoval(candidates, budget);
+            if (plan.Remove.Count == 0) return;
+
+            var removed = 0;
+            foreach (var path in plan.Remove)
+            {
+                try
+                {
+                    Microsoft.VisualBasic.FileIO.FileSystem.DeleteFile(path,
+                        Microsoft.VisualBasic.FileIO.UIOption.OnlyErrorDialogs,
+                        Microsoft.VisualBasic.FileIO.RecycleOption.SendToRecycleBin);
+                    removed++;
+                }
+                catch (Exception ex)
+                {
+                    // One unremovable file - open elsewhere, or a permission problem - must
+                    // not stop the rest of the plan from running.
+                    _log.Warn($"could not prune {path}", ex);
+                }
+            }
+
+            if (removed == 0) return;
+            _log.Info($"capture budget: moved {removed} capture{(removed == 1 ? "" : "s")} to the Recycle Bin");
+            ShowToast($"Kept the capture folder under {CaptureNaming.FormatSize(budget)} - {CaptureBudget.DescribeFreed(plan.FreedBytes)}", "");
+            RefreshCapturesIfOpen();
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("could not run the capture budget", ex);
+        }
     }
 }

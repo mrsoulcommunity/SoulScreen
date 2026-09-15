@@ -1,6 +1,7 @@
 using System.Diagnostics;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Media;
 using System.Windows.Threading;
 using SoulScreen.App.Logic;
 using SoulScreen.Core.Sources;
@@ -72,6 +73,8 @@ public partial class MainWindow
         UpdateSessionTimer();
         UpdateRecordingPill();
         CheckRecordingDiskSpace();
+        CheckRecordingTimer();
+        SampleMetricsHistory();
 
         var source = ActiveSource;
         if (source is null)
@@ -163,6 +166,7 @@ public partial class MainWindow
         MetricsText.Text = string.Join("   ", parts);
 
         if (StatsHud.Visibility == Visibility.Visible) UpdateStatsHud(refresh, latency, lost);
+        UpdatePerformanceGraph();
         UpdateTray();
     }
 
@@ -292,6 +296,72 @@ public partial class MainWindow
     {
         if (element.Margin != margin) element.Margin = margin;
     }
+
+    // ----------------------------------------------------------------- sparkline
+
+    /// <summary>The last three minutes of frame rate, one sample per tick, for the graph
+    /// under the statistics figures. Cleared with each session.</summary>
+    private readonly MetricsHistory _fpsHistory = new(180);
+    private const double SparklineWidth = 190;
+    private const double SparklineHeight = 40;
+
+    private void SampleMetricsHistory()
+    {
+        if (_pipeline is null || VideoHost.Visibility != Visibility.Visible)
+        {
+            if (_fpsHistory.Count > 0) _fpsHistory.Clear();
+            return;
+        }
+        _fpsHistory.Add(_pipeline.FramesPerSecond);
+    }
+
+    /// <summary>Redraws the fps sparkline. A single stream geometry per tick - the cost is
+    /// one small path, not a render-target rewrite, and only while it can be seen.</summary>
+    private void UpdatePerformanceGraph()
+    {
+        if (PerformanceGraph is null) return;
+
+        var wanted = _settings.ShowPerformanceGraph && StatsHud.Visibility == Visibility.Visible
+                     && _fpsHistory.Count > 1;
+        if (!wanted)
+        {
+            if (PerformanceGraph.Visibility != Visibility.Collapsed) PerformanceGraph.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        var values = _fpsHistory.ToArray();
+        var max = _fpsHistory.Max() ?? 0;
+        if (max <= 0) max = 1;
+
+        var step = SparklineWidth / (MetricsHistoryCapacity - 1);
+        // The line starts at the left while the buffer fills, then scrolls right to left.
+        var originX = _fpsHistory.IsFull ? 0 : SparklineWidth - (values.Length - 1) * step;
+
+        var geometry = new StreamGeometry();
+        using (var context = geometry.Open())
+        {
+            Point? previous = null;
+            for (var i = 0; i < values.Length; i++)
+            {
+                var x = originX + i * step;
+                var y = SparklineHeight - 2 - Math.Clamp(values[i] / max, 0.0, 1.0) * (SparklineHeight - 4);
+                var point = new Point(x, y);
+                if (previous is null) context.BeginFigure(point, false, false);
+                else context.LineTo(point, true, false);
+                previous = point;
+            }
+        }
+        geometry.Freeze();
+        PerformanceGraphLine.Data = geometry;
+
+        if (PerformanceGraph.Visibility != Visibility.Visible)
+        {
+            PerformanceGraph.Visibility = Visibility.Visible;
+            PositionOverlays();
+        }
+    }
+
+    private int MetricsHistoryCapacity => _fpsHistory.Capacity;
 
     private void UpdateSessionTimer()
     {

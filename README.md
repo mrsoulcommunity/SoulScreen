@@ -122,7 +122,7 @@ and the connection all keep going, and resuming lands on the live picture, not o
 
 ### Captures
 
-`Ctrl+G` shows every screenshot and recording in the capture folder, newest first. Click one
+`Ctrl+G` shows every screenshot and recording in the capture folder. Click one
 to look at it without leaving the app: the arrow keys step through the rest, `Space` plays a
 recording and `Delete` sends the one on screen to the Recycle Bin. Drag a tile out to drop the
 file into Explorer or a chat; right-click, or `Ctrl+C` and `Delete` on a focused tile, to copy it (as the file,
@@ -131,13 +131,22 @@ files SoulScreen named are listed, so pointing the capture folder at Pictures do
 the whole of Pictures in with it. Screenshots can be saved as PNG or, a fraction of the size,
 as JPEG. Two taken in the same second no longer overwrite each other.
 
+The gallery has its own **search** - every word typed must appear in the file name, and typing
+`rec` or `shot` finds recordings and screenshots by kind without learning any syntax - and a
+**sort** choice: newest first, oldest first, or largest first. A summary line adds the folder
+up: how many captures and how much drive they take. A **storage budget** (off, 5, 20 or 50 GB,
+or a byte count hand-set in settings.json) moves the oldest captures to the Recycle Bin once
+the folder grows past it, so a long recording session can never quietly fill the drive.
+
 Recording remuxes the phone's own H.264 rather than re-encoding it, so the picture costs
 almost nothing and loses no quality. Sound is the exception: the phone sends AAC-ELD, which
 few players outside FFmpeg can open, so it is decoded and re-encoded as ordinary AAC — a
 fraction of a core, and a file that plays everywhere. The audio track is laid against the
 picture by arrival time and lost packets become silence, so the two do not drift apart over
 a long recording. Recording starts on the next keyframe, which is why the counter can sit at
-"waiting for a keyframe" for a moment.
+"waiting for a keyframe" for a moment. Right-clicking while recording offers a **timed stop**
+- 1, 5, 10 or 30 minutes, or cancel - and the countdown reads on the recording badge, so a
+recording left to end on its own is never a surprise.
 
 ### Markup
 
@@ -216,6 +225,15 @@ Worth knowing about:
 - **Output device** sends the phone's sound to a chosen endpoint rather than the default.
 - **Minimise / close to the notification area** keeps the receiver running with the window
   out of the way, and **start when you sign in** opens it there ready for the phone.
+- **Animations** can follow Windows' own reduce-motion setting, be pinned on, or be pinned
+  off - every transition in the app answers to it.
+- **Display** moves the window to any monitor this PC has, and keeps it there when one is
+  unplugged or the desktop changes.
+- **Export / import settings** writes the preferences to a JSON file and reads them back on
+  another machine: preferences travel, while the receiver name, the window place, the phone
+  history and the trust decisions stay this machine's own.
+- **Performance graph** draws the last minute of frame pace and buffering under the
+  statistics overlay, so a stutter can be told from a spike at a glance.
 
 ### Smoothness, and the delay it costs
 

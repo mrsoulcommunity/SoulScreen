@@ -162,6 +162,10 @@ public sealed class AppSettings
     /// <summary>Show the statistics overlay over the picture.</summary>
     public bool ShowStats { get; set; }
 
+    /// <summary>Draw the small performance graph under the statistics overlay, so a spike
+    /// is seen as a shape rather than worked out from numbers.</summary>
+    public bool ShowPerformanceGraph { get; set; }
+
     /// <summary>Round the picture's corners in the window, as the phone's own screen is.</summary>
     public bool RoundedCorners { get; set; } = true;
 
@@ -214,6 +218,10 @@ public sealed class AppSettings
 
     public ScreenshotFormat ScreenshotFormat { get; set; } = ScreenshotFormat.Png;
 
+    /// <summary>Most the capture folder may hold, in bytes. Zero means no budget, which is
+    /// the default: the folder grows until the user prunes it.</summary>
+    public long CaptureBudgetBytes { get; set; }
+
     // ------------------------------------------------------------- on connecting
 
     /// <summary>Bring the window out of the notification area or the taskbar when a phone
@@ -253,6 +261,13 @@ public sealed class AppSettings
 
     /// <summary>Set once the welcome screen has been seen, so it is shown only the first time.</summary>
     public bool HasSeenWelcome { get; set; }
+
+    /// <summary>The app's own answer to Windows' animation setting.</summary>
+    public MotionPreference Animations { get; set; } = MotionPreference.FollowWindows;
+
+    /// <summary>Which display the window sits on: "current", "primary", or the index of
+    /// one, as text. Checked when a session starts and when displays change.</summary>
+    public string TargetDisplay { get; set; } = DisplayLayout.CurrentDisplay;
 
     /// <summary>Last window placement, restored on the next launch.</summary>
     public double? WindowLeft { get; set; }
@@ -337,6 +352,19 @@ public sealed class AppSettings
         if (!Enum.IsDefined(Latency)) Latency = LatencyMode.Balanced;
         if (!Enum.IsDefined(Accent)) Accent = AccentColor.Blue;
         if (!Enum.IsDefined(ScreenshotFormat)) ScreenshotFormat = ScreenshotFormat.Png;
+        if (!Enum.IsDefined(Animations)) Animations = MotionPreference.FollowWindows;
+
+        // A hand-edited budget can hold anything; negative and absurdly small values mean
+        // "off" rather than "prune every capture the moment it is taken".
+        if (CaptureBudgetBytes < 256L * 1024 * 1024) CaptureBudgetBytes = 0;
+
+        // The display choice is "current", "primary" or a whole number a monitor answers to.
+        if (TargetDisplay != DisplayLayout.CurrentDisplay
+            && TargetDisplay != DisplayLayout.PrimaryDisplay
+            && (!int.TryParse(TargetDisplay, System.Globalization.CultureInfo.InvariantCulture, out var displayIndex) || displayIndex < 0))
+        {
+            TargetDisplay = DisplayLayout.CurrentDisplay;
+        }
 
         if (MiniPlayerLongSide is not (> 0 and < 20000)) MiniPlayerLongSide = null;
         if (MiniPlayerLeft is not (> -20000 and < 20000) || MiniPlayerTop is not (> -20000 and < 20000))

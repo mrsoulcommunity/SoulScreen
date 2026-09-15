@@ -118,6 +118,16 @@ public partial class MainWindow
             var decoded = await Task.Run(() => DecodeForViewer(item.Path));
             if (generation != _viewerGeneration || !IsViewerOpen) return;
 
+            // A capture taken moments ago can still be flushed to disk; one clean retry
+            // covers the gap without hiding a file that is genuinely unreadable.
+            if (decoded is null)
+            {
+                await Task.Delay(150);
+                if (generation != _viewerGeneration || !IsViewerOpen) return;
+                decoded = await Task.Run(() => DecodeForViewer(item.Path));
+                if (generation != _viewerGeneration || !IsViewerOpen) return;
+            }
+
             if (decoded is not { } picture)
             {
                 ShowViewerMessage("This screenshot could not be opened. It may have been moved, or still be being written.");

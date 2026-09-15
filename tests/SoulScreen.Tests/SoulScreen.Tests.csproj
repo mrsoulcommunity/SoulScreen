@@ -32,6 +32,9 @@
     <!-- The app's WPF-free logic, compiled in directly: referencing the WPF app itself would
          make this whole suite Windows-desktop-only for the sake of a few pure functions. -->
     <Compile Include="..\..\src\SoulScreen.App\Logic\*.cs" Link="AppLogic\%(Filename)%(Extension)" />
+    <!-- AppSettings is the settings file's shape, which Logic's SettingsTransfer works on;
+          it is WPF-free too, so it joins the suite the same way. -->
+    <Compile Include="..\..\src\SoulScreen.App\AppSettings.cs" Link="AppLogic\AppSettings.cs" />
   </ItemGroup>
 
 </Project>

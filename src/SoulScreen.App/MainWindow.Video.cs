@@ -27,6 +27,9 @@ public partial class MainWindow
     private Point _panOrigin;
     private bool _panning;
 
+    /// <summary>Armed while a timed stop is counting down; null when none is.</summary>
+    private RecordingTimer? _recordingTimer;
+
     private void InitialiseVideo()
     {
         Video.VideoSizeChanged += OnVideoSizeChanged;
@@ -410,6 +413,9 @@ public partial class MainWindow
         MenuMirror.IsChecked = _settings.MirrorHorizontally;
         MenuRecord.IsEnabled = RecordButton.IsEnabled;
         MenuRecord.Header = RecordButton.IsChecked == true ? "Stop recording" : "Record to MP4";
+        // The timed stop only means something while a recording is running.
+        MenuTimedStop.Visibility = RecordButton.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+        if (MenuCancelTimedStop is not null) MenuCancelTimedStop.IsEnabled = _recordingTimer is { IsArmed: true };
         MenuMute.IsEnabled = _audio is not null;
         MenuMute.IsChecked = MuteButton.IsChecked == true;
         MenuStats.IsChecked = StatsHud.Visibility == Visibility.Visible;
@@ -482,6 +488,8 @@ public partial class MainWindow
             var path = CaptureNaming.NewPath(_settings.CaptureDirectory, DateTime.Now, ".mp4");
             _pipeline.RecordAudio = _settings.RecordAudio && _audio is not null;
             _pipeline.StartRecording(path);
+            // Any timed stop belonged to the recording that has just ended.
+            _recordingTimer = null;
             RecordButton.ToolTip = "Stop recording (Ctrl+R)";
             ShowTransientStatus($"Recording to {Path.GetFileName(path)}", null);
             ShowToast("Recording", "");
@@ -490,10 +498,62 @@ public partial class MainWindow
         {
             RecordButton.ToolTip = "Record to MP4 (Ctrl+R)";
             _pipeline.StopRecording();
+            // A manual stop cancels an armed timed stop with it.
+            _recordingTimer = null;
         }
 
         UpdateRecordingPill();
         UpdateTaskbar();
+    }
+
+    // --------------------------------------------------------- timed recording
+
+    /// <summary>"Stop recording in five minutes" from the context menu or the palette: arms
+    /// a timed stop, starting the recording first if it has not begun. Arming again extends
+    /// the stop rather than fighting it.</summary>
+    private void OnMenuRecordTimed(object sender, RoutedEventArgs e)
+    {
+        var minutes = sender is FrameworkElement { Tag: string tag }
+            && int.TryParse(tag, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+            && parsed > 0 ? parsed : 5;
+
+        if (RecordButton.IsChecked != true)
+        {
+            if (!RecordButton.IsEnabled) return;
+            // OnRecordChanged starts the recording before this returns.
+            RecordButton.IsChecked = true;
+        }
+
+        _recordingTimer ??= new RecordingTimer();
+        _recordingTimer.Arm(TimeSpan.FromMinutes(minutes), DateTime.UtcNow);
+        ShowToast($"Recording stops in {minutes} minute{(minutes == 1 ? "" : "s")}", "\uEB52");
+        UpdateRecordingPill();
+        UpdateTaskbar();
+    }
+
+    /// <summary>Cancels an armed timed stop; the recording itself carries on.</summary>
+    private void OnMenuCancelTimedStop(object sender, RoutedEventArgs e)
+    {
+        if (_recordingTimer is not { IsArmed: true } timer) return;
+        timer.Disarm();
+        _recordingTimer = null;
+        ShowToast("The timed stop was cancelled", "\uE711");
+        UpdateRecordingPill();
+    }
+
+    /// <summary>The metrics tick's timed-stop duty. Once a deadline passes, the recording
+    /// ends after a short grace - long enough for the final frames to flush, never long
+    /// enough for a stalled tick to make the file run late by anything noticeable.</summary>
+    private void CheckRecordingTimer()
+    {
+        if (_recordingTimer is not { IsArmed: true } timer) return;
+        var now = DateTime.UtcNow;
+        if (!timer.IsDue(now) || !timer.IsOverdue(now)) return;
+
+        timer.Disarm();
+        _recordingTimer = null;
+        // Stopping through the toggle runs the same finalisation a manual stop does.
+        if (RecordButton.IsChecked == true) RecordButton.IsChecked = false;
     }
 
     /// <summary>The toolbar's dot and the badge over the picture pulse together while recording.</summary>
@@ -538,9 +598,23 @@ public partial class MainWindow
         }
 
         var elapsed = pipeline.RecordingDuration;
-        RecordingPillText.Text = elapsed.TotalHours >= 1
+        var clock = elapsed.TotalHours >= 1
             ? $"{(int)elapsed.TotalHours}:{elapsed.Minutes:00}:{elapsed.Seconds:00}"
             : $"{elapsed.Minutes:00}:{elapsed.Seconds:00}";
+
+        // A timed stop reads on the badge, so nobody discovers one only when it fires.
+        if (_recordingTimer is { IsArmed: true } timer)
+        {
+            if (timer.Remaining(DateTime.UtcNow) is { } remaining)
+            {
+                RecordingPillText.Text = $"{clock} · {RecordingTimer.DescribeCountdown(remaining)}";
+                return;
+            }
+            RecordingPillText.Text = $"{clock} · stopping…";
+            return;
+        }
+
+        RecordingPillText.Text = clock;
     }
 
     private void OnRecordingPillClick(object sender, RoutedEventArgs e) => RecordButton.IsChecked = false;
@@ -790,7 +864,19 @@ public partial class MainWindow
     {
         var shown = _settings.ShowStats && VideoHost.Visibility == Visibility.Visible && !_isMiniPlayer;
         StatsHud.Visibility = shown ? Visibility.Visible : Visibility.Collapsed;
+        if (!shown && PerformanceGraph is not null) PerformanceGraph.Visibility = Visibility.Collapsed;
         if (shown) UpdateMetrics();
+    }
+
+    /// <summary>The graph belongs to the statistics overlay, so it follows the same switch
+    /// and cannot be had without it.</summary>
+    private void SetShowPerformanceGraph(bool shown)
+    {
+        if (_settings.ShowPerformanceGraph == shown) return;
+        _settings.ShowPerformanceGraph = shown;
+        _settings.Save();
+        SyncCheck(PerformanceGraphCheck, shown);
+        UpdatePerformanceGraph();
     }
 
     // ------------------------------------------------------------------- pause

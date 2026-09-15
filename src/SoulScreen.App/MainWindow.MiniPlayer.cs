@@ -244,7 +244,7 @@ public partial class MainWindow
         var to = MiniPlayerGeometry.Snap(from, new Bounds(area.Left, area.Top, area.Width, area.Height));
 
         var alreadyThere = Math.Abs(to.Left - from.Left) < 0.5 && Math.Abs(to.Top - from.Top) < 0.5;
-        if (alreadyThere || !SystemParameters.ClientAreaAnimation)
+        if (alreadyThere || !Motion.Enabled)
         {
             Left = to.Left;
             Top = to.Top;

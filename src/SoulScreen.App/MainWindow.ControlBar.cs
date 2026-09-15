@@ -155,7 +155,7 @@ public partial class MainWindow
 
     private void FadeControlBar(double to, TimeSpan duration, EasingMode easing)
     {
-        if (!SystemParameters.ClientAreaAnimation)
+        if (!Motion.Enabled)
         {
             ControlBar.BeginAnimation(OpacityProperty, null);
             ControlBar.Opacity = to;

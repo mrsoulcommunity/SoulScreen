@@ -41,6 +41,29 @@ public partial class MainWindow : Window
 
     private bool _shuttingDown;
 
+    /// <summary>Watches for displays being plugged or unplugged, for the display picker.</summary>
+    private DisplayService.DisplayWatcher? _displayWatcher;
+
+    /// <summary>A display arrived or left: the picker's list is rebuilt if settings are
+    /// open, and a window left hanging past the edge of a monitor that has gone is pulled
+    /// back onto one that remains.</summary>
+    private void OnDisplaysChanged()
+    {
+        if (_shuttingDown) return;
+        Dispatcher.BeginInvoke(() =>
+        {
+            if (SettingsPanel.Visibility == Visibility.Visible) PopulateDisplayChoices();
+
+            var desktop = DisplayService.VirtualDesktop(this);
+            var (left, top) = Logic.DisplayLayout.ClampToDisplays(Left, Top, ActualWidth, ActualHeight, desktop);
+            if (Math.Abs(left - Left) > 0.5 || Math.Abs(top - Top) > 0.5)
+            {
+                Left = left;
+                Top = top;
+            }
+        });
+    }
+
     /// <summary>Set by the tray's Quit and by a real close; a close with "close to tray" on
     /// only hides the window otherwise.</summary>
     private bool _quitRequested;
@@ -111,6 +134,10 @@ public partial class MainWindow : Window
 
         Closing += OnClosing;
         ThemeManager.Changed += OnThemeApplied;
+
+        // Displays arriving and leaving change both the picker's list and whether the
+        // chosen display still exists; the window is kept reachable either way.
+        _displayWatcher = new DisplayService.DisplayWatcher(this, OnDisplaysChanged);
 
         // Started from the dispatcher rather than from Loaded: a window hidden to the tray
         // straight after launch may never raise Loaded, and one shown again later must not
@@ -551,6 +578,9 @@ public partial class MainWindow : Window
         if (_settings.BringToFrontOnConnect && (!IsVisible || WindowState == WindowState.Minimized))
             ActivateFromAnotherInstance();
 
+        // The display preference names where a session is meant to be watched.
+        MoveWindowToResolvedDisplay();
+
         // Not from the taskbar: a minimised window sent fullscreen remembers "minimised" as the
         // state to go back to, and Esc would then throw it off the screen.
         if (_settings.FullscreenOnConnect && IsVisible && WindowState != WindowState.Minimized && !_isFullscreen && !_isMiniPlayer)
@@ -748,7 +778,7 @@ public partial class MainWindow : Window
                      && WindowState != WindowState.Minimized
                      && IdlePanel.Visibility == Visibility.Visible
                      && _stateShown == MirrorSourceState.Ready
-                     && SystemParameters.ClientAreaAnimation;
+                     && Motion.ShouldAnimate(_settings);
         if (wanted == _rippling) return;
         _rippling = wanted;
 
@@ -963,6 +993,7 @@ public partial class MainWindow : Window
         _metricsTimer.Stop();
         _toastTimer.Stop();
         _cursorTimer?.Stop();
+        _displayWatcher?.Dispose();
         DisplaySleep.Release();
         _tray?.Dispose();
         _aspectLock?.Dispose();
