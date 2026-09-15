@@ -15,15 +15,6 @@ namespace SoulScreen.Media;
 /// </summary>
 public sealed unsafe class H264Decoder : IDisposable
 {
-    /// <summary>
-    /// swscale's algorithm flags. The binding exposes the colour-space constants but not
-    /// these, so they are repeated from libswscale/swscale.h.
-    /// </summary>
-    private const int SwsPoint = 0x10;
-
-    /// <summary>swscale's neutral contrast and saturation, both 1.0 in 16.16 fixed point.</summary>
-    private const int NeutralGain = 1 << 16;
-
     private readonly ILogger _log = Log.For("decode");
 
     // Reused across frames: sws_scale takes managed arrays, and allocating them per frame
@@ -175,18 +166,9 @@ public sealed unsafe class H264Decoder : IDisposable
         var height = frame->height;
         if (width <= 0 || height <= 0) return null;
 
-        // iOS mirrors with full-range luma, which libavcodec reports either as a YUVJ pixel
-        // format or through color_range. Both spellings have to be honoured or the picture
-        // comes back with crushed blacks and blown highlights.
-        var rawFormat = (AVPixelFormat)frame->format;
-        var (sourceFormat, formatIsFullRange) = NormalisePixelFormat(rawFormat);
-        var fullRange = formatIsFullRange || frame->color_range == AVColorRange.AVCOL_RANGE_JPEG;
-
-        var colorspace = frame->colorspace == AVColorSpace.AVCOL_SPC_UNSPECIFIED
-            // Unspecified is the common case from a phone. Height is the usual tiebreak:
-            // standard-definition content is BT.601, everything larger is BT.709.
-            ? (height > 576 ? AVColorSpace.AVCOL_SPC_BT709 : AVColorSpace.AVCOL_SPC_SMPTE170M)
-            : frame->colorspace;
+        var (sourceFormat, formatIsFullRange) = ColourSpace.Normalise((AVPixelFormat)frame->format);
+        var fullRange = ColourSpace.IsFullRange(frame, formatIsFullRange);
+        var colorspace = ColourSpace.Of(frame);
 
         EnsureScaler(width, height, sourceFormat, fullRange, colorspace);
         if (_scaler is null) return null;
@@ -221,20 +203,6 @@ public sealed unsafe class H264Decoder : IDisposable
     }
 
     /// <summary>
-    /// Maps the deprecated YUVJ formats onto their plain equivalents, reporting the full
-    /// range they imply. Passing YUVJ straight to swscale works but logs a deprecation
-    /// warning on every stream and leaves the range for the caller to set anyway.
-    /// </summary>
-    private static (AVPixelFormat Format, bool FullRange) NormalisePixelFormat(AVPixelFormat format) => format switch
-    {
-        AVPixelFormat.AV_PIX_FMT_YUVJ420P => (AVPixelFormat.AV_PIX_FMT_YUV420P, true),
-        AVPixelFormat.AV_PIX_FMT_YUVJ422P => (AVPixelFormat.AV_PIX_FMT_YUV422P, true),
-        AVPixelFormat.AV_PIX_FMT_YUVJ444P => (AVPixelFormat.AV_PIX_FMT_YUV444P, true),
-        AVPixelFormat.AV_PIX_FMT_YUVJ440P => (AVPixelFormat.AV_PIX_FMT_YUV440P, true),
-        _ => (format, false),
-    };
-
-    /// <summary>
     /// (Re)builds the colour converter. iOS changes resolution whenever the phone rotates,
     /// so this has to notice a new geometry mid-stream rather than assume one forever.
     /// </summary>
@@ -255,7 +223,7 @@ public sealed unsafe class H264Decoder : IDisposable
         _scaler = ffmpeg.sws_getContext(
             width, height, sourceFormat,
             width, height, AVPixelFormat.AV_PIX_FMT_BGRA,
-            SwsPoint, null, null, null);
+            ColourSpace.SwsPoint, null, null, null);
 
         if (_scaler is null)
         {
@@ -263,7 +231,8 @@ public sealed unsafe class H264Decoder : IDisposable
             return;
         }
 
-        ApplyColourspace(fullRange, colorspace);
+        if (ColourSpace.Apply(_scaler, fullRange, colorspace) < 0)
+            _log.Debug("this pixel format does not accept colour-space overrides; using swscale defaults");
 
         _scalerWidth = width;
         _scalerHeight = height;
@@ -271,47 +240,8 @@ public sealed unsafe class H264Decoder : IDisposable
         _scalerFullRange = fullRange;
         _scalerColorspace = colorspace;
         _log.Info($"colour converter: {sourceFormat} {width}x{height} " +
-                  $"{(fullRange ? "full" : "limited")} range, {DescribeColourspace(colorspace)} to BGRA");
+                  $"{(fullRange ? "full" : "limited")} range, {ColourSpace.Describe(colorspace)} to BGRA");
     }
-
-    /// <summary>
-    /// Tells swscale which matrix and range the source uses. Getting either wrong is
-    /// immediately visible: the wrong matrix tints the picture, the wrong range crushes
-    /// blacks and blows out highlights.
-    /// </summary>
-    private void ApplyColourspace(bool fullRange, AVColorSpace colorspace)
-    {
-        var coefficients = ffmpeg.sws_getCoefficients(ToSwsColorspace(colorspace));
-        if (coefficients is null) return;
-
-        var table = new int_array4();
-        for (uint i = 0; i < 4; i++) table[i] = coefficients[i];
-
-        // BGRA output is always full range.
-        var result = ffmpeg.sws_setColorspaceDetails(_scaler, table, srcRange: fullRange ? 1 : 0, table, dstRange: 1,
-            brightness: 0, contrast: NeutralGain, saturation: NeutralGain);
-
-        if (result < 0) _log.Debug("this pixel format does not accept colour-space overrides; using swscale defaults");
-    }
-
-    private static int ToSwsColorspace(AVColorSpace colorspace) => colorspace switch
-    {
-        AVColorSpace.AVCOL_SPC_BT709 => ffmpeg.SWS_CS_ITU709,
-        AVColorSpace.AVCOL_SPC_FCC => ffmpeg.SWS_CS_FCC,
-        AVColorSpace.AVCOL_SPC_BT470BG => ffmpeg.SWS_CS_ITU601,
-        AVColorSpace.AVCOL_SPC_SMPTE170M => ffmpeg.SWS_CS_SMPTE170M,
-        AVColorSpace.AVCOL_SPC_SMPTE240M => ffmpeg.SWS_CS_SMPTE240M,
-        AVColorSpace.AVCOL_SPC_BT2020_NCL or AVColorSpace.AVCOL_SPC_BT2020_CL => ffmpeg.SWS_CS_BT2020,
-        _ => ffmpeg.SWS_CS_ITU709,
-    };
-
-    private static string DescribeColourspace(AVColorSpace colorspace) => colorspace switch
-    {
-        AVColorSpace.AVCOL_SPC_BT709 => "BT.709",
-        AVColorSpace.AVCOL_SPC_BT470BG or AVColorSpace.AVCOL_SPC_SMPTE170M => "BT.601",
-        AVColorSpace.AVCOL_SPC_BT2020_NCL or AVColorSpace.AVCOL_SPC_BT2020_CL => "BT.2020",
-        _ => colorspace.ToString(),
-    };
 
     public void Dispose()
     {

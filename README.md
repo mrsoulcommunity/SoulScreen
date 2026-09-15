@@ -61,6 +61,8 @@ phone's screen at 498x1080 / 59.9 fps.
 | Sustained poor-connection advice, offered once, not on every hiccup | working |
 | Markup: pen, highlighter and laser pointer over the picture | working |
 | Captures viewer, with recordings played in place | working |
+| A moment of a recording saved as an animated GIF or a short WebM | working |
+| A phone that drops and comes back inside a minute resumes the session | working |
 | Ask before an iPhone mirrors; allowed and blocked iPhones | working |
 | Connection check: network, firewall and helpers, with fixes | working |
 | Shortcuts from any app, taskbar thumbnail buttons | working |
@@ -208,6 +210,20 @@ a long recording. Recording starts on the next keyframe, which is why the counte
 - 1, 5, 10 or 30 minutes, or cancel - and the countdown reads on the recording badge, so a
 recording left to end on its own is never a surprise.
 
+A few seconds of a recording can be saved as a **clip**, to be sent to somebody as an
+animation: open the recording in the viewer and press `C`, or the scissors button, and the panel
+offers a length (2 to 15 seconds) and a format - a GIF, which plays anywhere, or a WebM, which is
+a fraction of the size and wants a modern player. The player stops where it is when the panel
+opens, because that is where the clip starts, and the start is pulled back off the end of the
+recording so a moment chosen near the end is still the length that was asked for. The clip is
+written into the capture folder as `SoulScreen-<time>.gif` or `.webm` and joins the gallery like
+any other capture; unless the tick is cleared it is also put on the clipboard, as a file and -
+for a GIF - as a picture, so it pastes straight into a chat. A GIF is scaled to at most 480
+pixels on its longest side and 12 frames a second, a WebM to 1280 and 30, which is what keeps a
+clip something that can be sent rather than something that has to be hosted. Making one
+transcodes, so a five-second clip takes a second or two, with the progress in the panel and a
+Stop beside it.
+
 ### Markup
 
 `Ctrl+E` lays a pen, a highlighter and a laser pointer over the picture, for pointing something
@@ -231,6 +247,21 @@ on, whether asking is switched on or not. Both lists can be edited in the same p
 AirPlay mirroring tells the receiver only a phone's name and model, so that is what the lists go
 by. It keeps the wrong phone off the screen - a housemate's, a colleague's - rather than being a
 lock.
+
+### When the iPhone drops and comes back
+
+iOS tears a mirroring session down and sets a new one up when the phone sleeps, changes
+network, or steps out of range for a moment. That used to end the session here: the summary was
+written, the recording was finished off and the picture became the idle screen, all for a
+flicker.
+
+A session whose phone goes away now waits a minute instead. The last frame stays where it was,
+the session clock and the recording both keep running, and a badge over the picture names the
+phone being waited for. That phone coming back inside the minute resumes the session - nothing
+is asked a second time, and the recording carries on into the same file - and the badge becomes
+"reconnected" for a few seconds before it goes. A different phone, a minute with no phone, or
+stopping the receiver all end the session exactly as they did before, with its summary and its
+recording finalised.
 
 ### When the iPhone cannot find this PC
 
@@ -431,6 +462,13 @@ round-tripping our own code:
 - recordings are written and then read back with an independent demuxer, including the
   audio track: two streams, the right codecs, and an audio length that matches the picture
   even when packets went missing on the way in
+- clips are cut out of a recording made the same way a session makes one, and read back with
+  an independent demuxer too: a GIF that is signed, the right size and actually animated, and
+  a WebM carrying VP9 or VP8 at the size the recording allowed
+- the rules that decide whether a dropped session waits for its phone are checked on their
+  own - which introductions count as the same device, what a phone that never named its model
+  does to a match, and when the minute has run out - with no phone, socket or dispatcher
+  involved at all
 
 ---
 

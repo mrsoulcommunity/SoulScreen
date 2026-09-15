@@ -262,7 +262,13 @@ public partial class MainWindow
                 yield return new("Start the receiver", "Receiver", "", null, async () => await ToggleReceiverAsync(), "airplay advertise on");
 
             if (_demo is null && DemoSource.IsAvailable)
-                yield return new("Try the demo", "Receiver", "", null, OnDemoRequested, "test pattern sample no phone");
+            {
+                yield return new("Try the demo", "Receiver", "", null, () => OnDemoRequested(DemoPattern.MotionTest), "test pattern sample no phone motion");
+                yield return new("Try the demo: colour bars", "Receiver", "", null,
+                    () => OnDemoRequested(DemoPattern.ColorBars), "test pattern sample no phone colour calibration");
+                yield return new("Try the demo: refresh-rate checker", "Receiver", "", null,
+                    () => OnDemoRequested(DemoPattern.RefreshRateChecker), "test pattern sample no phone judder stutter hz refresh");
+            }
         }
 
         yield return new("Captures", "Go to", "", "Ctrl+G", ShowCaptures, "gallery screenshots recordings photos videos library");
@@ -350,10 +356,10 @@ public partial class MainWindow
         }, "exit close");
     }
 
-    private async void OnDemoRequested()
+    private async void OnDemoRequested(DemoPattern pattern)
     {
         if (!TryBeginReceiverWork()) return;
-        try { await StartDemoAsync(); }
+        try { await StartDemoAsync(pattern); }
         finally { EndReceiverWork(); }
     }
 }

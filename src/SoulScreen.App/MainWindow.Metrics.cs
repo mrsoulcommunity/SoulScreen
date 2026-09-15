@@ -86,6 +86,10 @@ public partial class MainWindow
 
         StatusText.Text = _transientStatus ?? source.State switch
         {
+            // A session held open for the phone that dropped is neither advertising nor
+            // mirroring, and the bar should say what it is actually waiting for.
+            MirrorSourceState.Ready when IsHeldForReconnect =>
+                $"Waiting for {_reconnect.DeviceName ?? "the phone"} to come back",
             MirrorSourceState.Ready when _receiver is not null =>
                 $"Advertising as \"{_receiver.AdvertisedName}\" on port {_settings.Port}",
             MirrorSourceState.Connecting => _demo is null ? "Negotiating with the phone" : "Starting the demo",

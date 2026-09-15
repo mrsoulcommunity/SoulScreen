@@ -13,100 +13,82 @@ public readonly record struct RectBounds(double Left, double Top, double Width, 
 {
     public double Right => Left + Width;
     public double Bottom => Top + Height;
-    public bool IsEmpty => Width <= 0 || Height <= 0;
+    public bool IsEmpty => !double.IsFinite(Left) || !double.IsFinite(Top)
+        || !double.IsFinite(Width) || !double.IsFinite(Height) || Width <= 0 || Height <= 0;
 }
 
-/// <summary>
-/// Choosing and clamping which display the window sits on.
-/// <para>
-/// Moving a window to a chosen display is easy; doing it without stranding it - half on a
-/// monitor that has since been unplugged, or centred on a display Windows then removed -
-/// is the part worth testing. Deliberately free of WPF so it can be tested on its own.
-/// </para>
-/// </summary>
+/// <summary>Testable display selection and safe window placement helpers.</summary>
 public static class DisplayLayout
 {
-    /// <summary>The persisted choice: current display, or the primary one.</summary>
     public const string CurrentDisplay = "current";
-    /// <summary>The persisted choice meaning the primary display.</summary>
     public const string PrimaryDisplay = "primary";
 
-    /// <summary>
-    /// The display to move to for <paramref name="choice"/>, or null to leave the window
-    /// where it is. The current display is matched by the monitor holding the largest share
-    /// of the window - the one it is on, in every case that matters. A choice naming a
-    /// display that no longer exists falls back to leaving the window alone rather than
-    /// throwing it somewhere unexpected.
-    /// </summary>
-    public static DisplayChoice? Resolve(
-        string? choice, IReadOnlyList<DisplayChoice> displays,
-        RectBounds windowBounds)
+    public static DisplayChoice? Resolve(string? choice, IReadOnlyList<DisplayChoice> displays, RectBounds windowBounds)
     {
-        if (displays.Count == 0) return null;
+        if (displays.Count == 0 || windowBounds.IsEmpty) return null;
         if (string.IsNullOrEmpty(choice) || choice == CurrentDisplay) return null;
 
         if (choice == PrimaryDisplay)
-            return displays.FirstOrDefault(d => d.IsPrimary) ?? displays[0];
+            return displays.FirstOrDefault(d => !d.WorkArea.IsEmpty && d.IsPrimary)
+                ?? displays.FirstOrDefault(d => !d.WorkArea.IsEmpty);
 
-        if (int.TryParse(choice, System.Globalization.CultureInfo.InvariantCulture, out var index))
+        if (int.TryParse(choice, System.Globalization.CultureInfo.InvariantCulture, out var index)
+            && index >= 0 && index < displays.Count)
         {
-            if (index < 0 || index >= displays.Count) return null;
             var chosen = displays[index];
-            if (IsOnDisplay(windowBounds, chosen.WorkArea)) return null;
-            return chosen;
+            return chosen.WorkArea.IsEmpty || IsOnDisplay(windowBounds, chosen.WorkArea) ? null : chosen;
         }
 
         return null;
     }
 
-    /// <summary>True when the window's centre sits on this display.</summary>
     public static bool IsOnDisplay(RectBounds window, RectBounds display)
     {
-        if (display.IsEmpty) return false;
+        if (window.IsEmpty || display.IsEmpty) return false;
         var centreX = window.Left + window.Width / 2;
         var centreY = window.Top + window.Height / 2;
         return centreX >= display.Left && centreX < display.Right
             && centreY >= display.Top && centreY < display.Bottom;
     }
 
-    /// <summary>
-    /// Where the window goes: centred on the display, then pulled back inside it if the
-    /// window is larger than the display allows.
-    /// </summary>
     public static (double Left, double Top) PlacementFor(DisplayChoice display, RectBounds window)
     {
+        if (display.WorkArea.IsEmpty || window.IsEmpty) return (window.Left, window.Top);
         var left = display.WorkArea.Left + Math.Max((display.WorkArea.Width - window.Width) / 2, 0);
         var top = display.WorkArea.Top + Math.Max((display.WorkArea.Height - window.Height) / 2, 0);
-
-        // A window bigger than the work area - fullscreen on a small monitor, or a portrait
-        // window on a landscape one - still starts inside it.
         if (left + window.Width > display.WorkArea.Right) left = Math.Max(display.WorkArea.Right - window.Width, display.WorkArea.Left);
         if (top + window.Height > display.WorkArea.Bottom) top = Math.Max(display.WorkArea.Bottom - window.Height, display.WorkArea.Top);
-
         return (left, top);
     }
 
-    /// <summary>Clamps any position so the window's title bar stays reachable: at least
-    /// <paramref name="minVisible"/> pixels of it must land on some display. Given the
-    /// union of every display's work area, this cannot leave a window in the void between
-    /// or beyond monitors.</summary>
     public static (double Left, double Top) ClampToDisplays(
         double left, double top, double width, double height,
         RectBounds virtualDesktop, double minVisible = 120)
     {
-        minVisible = Math.Clamp(minVisible, 40, width > 0 ? width : 40);
-        if (virtualDesktop.IsEmpty)
+        if (virtualDesktop.IsEmpty || !double.IsFinite(left) || !double.IsFinite(top)
+            || !double.IsFinite(width) || !double.IsFinite(height) || width <= 0 || height <= 0)
             return (left, top);
 
-        var x = left;
-        var y = top;
-        // An edge beyond the desktop comes back to that edge; a far-side overhang pulls
-        // fully inside, so the title bar is reachable again. A window already touching
-        // every edge is left where its owner put it.
-        if (x < virtualDesktop.Left) x = virtualDesktop.Left;
-        if (x > virtualDesktop.Right - minVisible) x = Math.Max(virtualDesktop.Right - width, virtualDesktop.Left);
-        if (y > virtualDesktop.Bottom - minVisible) y = Math.Max(virtualDesktop.Bottom - height, virtualDesktop.Top);
-        if (y < virtualDesktop.Top) y = virtualDesktop.Top;
+        minVisible = Math.Clamp(double.IsFinite(minVisible) ? minVisible : 120, 40, Math.Max(width, 40));
+
+        // Keep the window's title bar reachable. A window larger than the virtual desktop
+        // needs a negative origin so its far edge can still land on a real display. A normal
+        // window, on the other hand, should never preserve a large left/top overhang from a
+        // monitor that was just unplugged.
+        var x = width > virtualDesktop.Width
+            ? Math.Clamp(left, virtualDesktop.Right - width, virtualDesktop.Left)
+            : left < virtualDesktop.Left
+                ? virtualDesktop.Left
+                : left > virtualDesktop.Right - minVisible
+                    ? Math.Max(virtualDesktop.Right - width, virtualDesktop.Left)
+                    : left;
+        var y = height > virtualDesktop.Height
+            ? virtualDesktop.Bottom - height
+            : top < virtualDesktop.Top
+                ? virtualDesktop.Top
+                : top > virtualDesktop.Bottom - minVisible
+                    ? Math.Max(virtualDesktop.Bottom - height, virtualDesktop.Top)
+                    : top;
         return (x, y);
     }
 }

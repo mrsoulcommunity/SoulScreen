@@ -47,8 +47,10 @@ internal static class CaptureNaming
 
         return Path.GetExtension(name).ToLowerInvariant() switch
         {
-            ".png" or ".jpg" or ".jpeg" => CaptureKind.Screenshot,
-            ".mp4" => CaptureKind.Recording,
+            // A GIF is a still picture to everything that has no animation support, which
+            // includes this viewer; it is listed and copied as the image it is.
+            ".png" or ".jpg" or ".jpeg" or ".gif" => CaptureKind.Screenshot,
+            ".mp4" or ".webm" => CaptureKind.Recording,
             _ => null,
         };
     }

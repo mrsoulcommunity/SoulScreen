@@ -8,6 +8,7 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using SoulScreen.App.Logic;
+using SoulScreen.Media;
 
 namespace SoulScreen.App;
 
@@ -424,6 +425,25 @@ public partial class MainWindow
         MenuMini.Header = _isMiniPlayer ? "Leave the mini player" : "Mini player";
         MenuPause.Header = Video.IsFrozen ? "Resume picture" : "Pause picture";
         MenuMarkup.Header = IsMarkupActive ? "Leave markup" : "Markup";
+
+        // The pattern only means something while the demo, rather than a phone, is on screen.
+        var demoRunning = _demo is not null;
+        MenuDemoPattern.Visibility = demoRunning ? Visibility.Visible : Visibility.Collapsed;
+        MenuDemoPatternSeparator.Visibility = demoRunning ? Visibility.Visible : Visibility.Collapsed;
+        if (demoRunning)
+        {
+            MenuDemoMotion.IsChecked = _demo!.Pattern == DemoPattern.MotionTest;
+            MenuDemoColorBars.IsChecked = _demo.Pattern == DemoPattern.ColorBars;
+            MenuDemoRefresh.IsChecked = _demo.Pattern == DemoPattern.RefreshRateChecker;
+        }
+    }
+
+    private void OnMenuDemoPattern(object sender, RoutedEventArgs e)
+    {
+        if (_demo is null) return;
+        if (sender is not MenuItem { Tag: string tag } || !Enum.TryParse<DemoPattern>(tag, out var pattern)) return;
+        _demo.Pattern = pattern;
+        ShowToast($"Demo pattern: {DemoSource.PatternLabel(pattern)}", "");
     }
 
     private void OnMenuFit(object sender, RoutedEventArgs e)

@@ -143,6 +143,7 @@ public partial class MainWindow : Window
 
         Closing += OnClosing;
         ThemeManager.Changed += OnThemeApplied;
+        UpdateAccessibilityPalette();
 
         // Displays arriving and leaving change both the picker's list and whether the
         // chosen display still exists; the window is kept reachable either way.
@@ -231,6 +232,17 @@ public partial class MainWindow : Window
     {
         WindowFrame.SetDarkFrame(this, ThemeManager.IsDark);
         RecolourAccentSwatches();
+        UpdateAccessibilityPalette();
+    }
+
+    /// <summary>Refreshes the live accessibility metadata after a theme/accent change.
+    /// Screen readers should describe the state that is visible, not the state from the
+    /// previous palette.</summary>
+    private void UpdateAccessibilityPalette()
+    {
+        var mode = ThemeManager.IsDark ? "dark" : "light";
+        System.Windows.Automation.AutomationProperties.SetHelpText(
+            RootGrid, $"SoulScreen is using the {mode} theme with the {ThemeManager.Accent} accent.");
     }
 
     // ---------------------------------------------------------------- receiver
@@ -405,10 +417,20 @@ public partial class MainWindow : Window
 
     // -------------------------------------------------------------------- demo
 
-    private async void OnStartDemo(object sender, RoutedEventArgs e)
+    private void OnDemoLink(object sender, RoutedEventArgs e)
     {
+        DemoMenu.PlacementTarget = DemoLink;
+        DemoMenu.Placement = System.Windows.Controls.Primitives.PlacementMode.Top;
+        DemoMenu.IsOpen = true;
+    }
+
+    private async void OnStartDemoPattern(object sender, RoutedEventArgs e)
+    {
+        var pattern = sender is MenuItem { Tag: string tag } && Enum.TryParse<DemoPattern>(tag, out var parsed)
+            ? parsed
+            : DemoPattern.MotionTest;
         if (!TryBeginReceiverWork()) return;
-        try { await StartDemoAsync(); }
+        try { await StartDemoAsync(pattern); }
         finally { EndReceiverWork(); }
     }
 
@@ -416,7 +438,7 @@ public partial class MainWindow : Window
     /// Replaces the receiver with the test pattern. The receiver is stopped rather than left
     /// running beside it, so a phone cannot take the picture over half way through.
     /// </summary>
-    private async Task StartDemoAsync()
+    private async Task StartDemoAsync(DemoPattern pattern = DemoPattern.MotionTest)
     {
         // Ending the demo puts back what was there before it: a receiver that had been stopped
         // stays stopped, rather than the PC starting to advertise itself unasked.
@@ -429,7 +451,7 @@ public partial class MainWindow : Window
             _pipeline.FrameDecoded += OnFrameDecoded;
             _pipeline.RecordingFinished += OnRecordingFinished;
 
-            _demo = new DemoSource();
+            _demo = new DemoSource(pattern: pattern);
             _demo.StateChanged += OnReceiverStateChanged;
             _demo.VideoFormatChanged += OnVideoFormatChanged;
             _pipeline.Attach(_demo);
@@ -490,10 +512,24 @@ public partial class MainWindow : Window
             switch (e.State)
             {
                 case MirrorSourceState.Ready:
+                    // The phone that was just on screen may be about to come back: iOS drops a
+                    // session and sets a new one up for a sleep, a change of network or a
+                    // moment out of range, and the recording should survive that.
+                    if (HoldSessionForReconnect()) break;
                     EndSessionBookkeeping(SessionEndReason.PhoneEnded);
                     SetIdleState("Waiting for your iPhone", "This PC is advertising itself on your network.", e.State);
                     break;
                 case MirrorSourceState.Connecting:
+                    // While a session is being held open for the phone that dropped, the same
+                    // phone negotiating again leaves the picture where it is; anybody else
+                    // ends the wait and is dealt with as an ordinary new session.
+                    if (IsHeldForReconnect)
+                    {
+                        if (e.Device is null || IsReconnectSession(e.Device)) break;
+                        _log.Info("another device is connecting while the session waits for the one that dropped");
+                        EndHeldSession(SessionEndReason.TakenOver);
+                    }
+
                     // A question on screen, or a session being turned away, is not interrupted -
                     // nor is a phone already on screen by another merely starting a handshake,
                     // which may yet be cancelled. Tearing the picture down here ended a recording
@@ -504,10 +540,22 @@ public partial class MainWindow : Window
                     break;
                 case MirrorSourceState.Streaming:
                 {
+                    var sessionKey = _receiver?.SessionStartedAtUtc;
+
+                    // The phone whose session is being held open, back inside its minute: the
+                    // recording, the counters and the clock all carry on, and nothing is asked
+                    // of a phone that has already been let in once.
+                    if (IsReconnectSession(e.Device ?? ActiveSource?.Device))
+                    {
+                        _decidedSessionKey = sessionKey;
+                        _stateShown = e.State;
+                        CompleteReconnect(e.Device ?? ActiveSource?.Device);
+                        break;
+                    }
+
                     // AirPlay lets a second phone take the receiver over, and it arrives as another
                     // Streaming with no end to the first. Whatever was decided - shown, asked about,
                     // turned away - was about the phone before, so this one is decided afresh.
-                    var sessionKey = _receiver?.SessionStartedAtUtc;
                     if (sessionKey is not null && _decidedSessionKey is not null && sessionKey != _decidedSessionKey)
                     {
                         _log.Info("another device took the receiver over");
@@ -613,6 +661,8 @@ public partial class MainWindow : Window
     private void EndSessionBookkeeping(SessionEndReason reason = SessionEndReason.PhoneEnded)
     {
         _decidedSessionKey = null;
+        // However the session ended, the phone is no longer being waited for.
+        ClearReconnectHold();
         if (_sessionStartedUtc is not { } started) return;
         if (_userStopRequested && reason == SessionEndReason.PhoneEnded) reason = SessionEndReason.StoppedByUser;
         _userStopRequested = false;
@@ -796,6 +846,8 @@ public partial class MainWindow : Window
     {
         ReceiverToggle.Content = running ? "Stop receiver" : "Start receiver";
         ReceiverToggle.Style = (Style)FindResource(running ? "GhostButton" : "PrimaryButton");
+        System.Windows.Automation.AutomationProperties.SetName(
+            ReceiverToggle, $"{(running ? "Stop" : "Start")} receiver");
     }
 
     private bool _rippling;

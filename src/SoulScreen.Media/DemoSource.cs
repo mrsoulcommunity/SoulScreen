@@ -6,13 +6,29 @@ using SoulScreen.Core.Sources;
 
 namespace SoulScreen.Media;
 
+/// <summary>Which test pattern the demo paints.</summary>
+public enum DemoPattern
+{
+    /// <summary>A bouncing shape and a moving bar, so a dropped or repeated frame stands out.</summary>
+    MotionTest,
+
+    /// <summary>Reference colour bars and a grey-scale step wedge, for checking colour and tone.</summary>
+    ColorBars,
+
+    /// <summary>A hand sweeping past a fixed ring of ticks, so the display holding or skipping a
+    /// frame is visible even though the demo itself never drops one.</summary>
+    RefreshRateChecker,
+}
+
 /// <summary>
-/// A mirror source that needs no phone: it encodes a moving test pattern with the H.264
+/// A mirror source that needs no phone: it encodes one of a few test patterns with the H.264
 /// encoder in the FFmpeg build and delivers it exactly as the AirPlay transport would.
 /// <para>
 /// It exists so the whole path after the network - decoding, pacing, the picture controls,
 /// screenshots, recording - can be tried and checked without an iPhone in the room, both by
-/// a user wondering whether their PC is up to it and by anyone working on the app.
+/// a user wondering whether their PC is up to it and by anyone working on the app. The pattern
+/// can be switched while it runs, so one session can move from checking motion to checking
+/// colour without a restart.
 /// </para>
 /// </summary>
 public sealed class DemoSource : IMirrorSource
@@ -28,15 +44,18 @@ public sealed class DemoSource : IMirrorSource
     private Thread? _thread;
     private MirrorSourceState _state = MirrorSourceState.Stopped;
     private long _frames;
+    private volatile DemoPattern _pattern;
 
     /// <param name="width">Picture width; even, as H.264 4:2:0 requires.</param>
     /// <param name="height">Picture height; even.</param>
     /// <param name="fps">Frames a second to produce.</param>
-    public DemoSource(int width = 720, int height = 1280, int fps = 30)
+    /// <param name="pattern">The pattern to start with; change it later through <see cref="Pattern"/>.</param>
+    public DemoSource(int width = 720, int height = 1280, int fps = 30, DemoPattern pattern = DemoPattern.MotionTest)
     {
         _width = Math.Max(width & ~1, 64);
         _height = Math.Max(height & ~1, 64);
         _fps = Math.Clamp(fps, 5, 60);
+        _pattern = pattern;
     }
 
     /// <summary>True when FFmpeg is present and carries the encoder the pattern needs.</summary>
@@ -60,6 +79,18 @@ public sealed class DemoSource : IMirrorSource
 
     public SourceDeviceInfo? Device { get; private set; }
 
+    /// <summary>Which pattern is painted. Settable while streaming - the next frame picks it up,
+    /// and <see cref="Device"/>'s model updates with it so the stats HUD names it too.</summary>
+    public DemoPattern Pattern
+    {
+        get => _pattern;
+        set
+        {
+            _pattern = value;
+            if (Device is { } device) Device = device with { Model = PatternLabel(value) };
+        }
+    }
+
     /// <summary>Frames delivered so far.</summary>
     public long FrameCount => Interlocked.Read(ref _frames);
 
@@ -77,7 +108,7 @@ public sealed class DemoSource : IMirrorSource
             throw new FFmpegUnavailableException("This FFmpeg build has no H.264 encoder, so the demo cannot run.");
 
         _cts = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
-        Device = new SourceDeviceInfo("Demo", "test pattern");
+        Device = new SourceDeviceInfo("Demo", PatternLabel(_pattern));
         SetState(MirrorSourceState.Connecting);
 
         _thread = new Thread(() => Run(_cts.Token))
@@ -247,19 +278,44 @@ public sealed class DemoSource : IMirrorSource
 
     // ------------------------------------------------------------------- pattern
 
-    /// <summary>
-    /// Draws one frame: a slowly turning colour gradient, a bouncing disc, a sweeping bar and
-    /// a frame-count ladder along the edge, so dropped or repeated frames would be visible.
-    /// </summary>
+    /// <summary>The name shown for each pattern, in the stats HUD and in the app's picker.</summary>
+    public static string PatternLabel(DemoPattern pattern) => pattern switch
+    {
+        DemoPattern.ColorBars => "Color bars",
+        DemoPattern.RefreshRateChecker => "Refresh-rate checker",
+        _ => "Motion test",
+    };
+
+    /// <summary>Draws one frame of whichever pattern is selected, then the frame-count ladder
+    /// every pattern carries in the corner, so a frame the pipeline dropped or repeated is
+    /// always visible no matter what else is on screen.</summary>
     private unsafe void Paint(AVFrame* frame, long index)
+    {
+        var t = index / (double)_fps;
+        switch (_pattern)
+        {
+            case DemoPattern.ColorBars:
+                PaintColorBars(frame);
+                break;
+            case DemoPattern.RefreshRateChecker:
+                PaintRefreshChecker(frame, t);
+                break;
+            default:
+                PaintMotionTest(frame, index, t);
+                break;
+        }
+        PaintFrameLadder(frame, index);
+    }
+
+    /// <summary>A slowly turning colour gradient, a bouncing disc and a sweeping bar, so dropped
+    /// or repeated frames would be visible.</summary>
+    private unsafe void PaintMotionTest(AVFrame* frame, long index, double t)
     {
         var luma = frame->data[0];
         var cb = frame->data[1];
         var cr = frame->data[2];
         var lumaStride = frame->linesize[0];
         var chromaStride = frame->linesize[1];
-
-        var t = index / (double)_fps;
 
         // Background: hue drifts with time and shifts down the picture.
         for (var y = 0; y < _height; y++)
@@ -287,8 +343,82 @@ public sealed class DemoSource : IMirrorSource
         var barHeight = Math.Max(_height / 60, 4);
         for (var y = barY; y < Math.Min(barY + barHeight, _height); y++)
             new Span<byte>(luma + (long)y * lumaStride, _width).Fill(240);
+    }
 
-        // The frame counter as a binary ladder in the top-left corner: one square per bit.
+    private static readonly (byte Y, byte U, byte V)[] ColorBarSwatches =
+    [
+        ToYuv(1, 1, 1), // white
+        ToYuv(1, 1, 0), // yellow
+        ToYuv(0, 1, 1), // cyan
+        ToYuv(0, 1, 0), // green
+        ToYuv(1, 0, 1), // magenta
+        ToYuv(1, 0, 0), // red
+        ToYuv(0, 0, 1), // blue
+    ];
+
+    /// <summary>Reference colour bars over a grey-scale step wedge: a still picture, on purpose,
+    /// so colour and tone are what stand out rather than motion.</summary>
+    private unsafe void PaintColorBars(AVFrame* frame)
+    {
+        var barsHeight = _height * 5 / 6;
+        var barWidth = _width / ColorBarSwatches.Length;
+        for (var i = 0; i < ColorBarSwatches.Length; i++)
+        {
+            var (yy, u, v) = ColorBarSwatches[i];
+            var x0 = i * barWidth;
+            var width = i == ColorBarSwatches.Length - 1 ? _width - x0 : barWidth;
+            FillArea(frame, x0, 0, width, barsHeight, yy, u, v);
+        }
+
+        // A grey-scale step wedge along the foot: colour is for the bars above, this strip is
+        // for a lifted black level or banding in the panel's tone curve.
+        const int steps = 8;
+        var stepWidth = _width / steps;
+        for (var i = 0; i < steps; i++)
+        {
+            var level = (byte)(16 + i * (235 - 16) / (steps - 1));
+            var x0 = i * stepWidth;
+            var width = i == steps - 1 ? _width - x0 : stepWidth;
+            FillArea(frame, x0, barsHeight, width, _height - barsHeight, level, 128, 128);
+        }
+    }
+
+    /// <summary>A hand sweeping past a fixed ring of ticks. The demo advances the hand by the
+    /// same angle every source frame, so any unevenness in its sweep past the ticks is the
+    /// display holding or dropping a composition - not the network or the decoder, which the
+    /// frame ladder in the corner accounts for separately.</summary>
+    private unsafe void PaintRefreshChecker(AVFrame* frame, double t)
+    {
+        FillArea(frame, 0, 0, _width, _height, 30, 128, 128);
+
+        var cx = _width / 2;
+        var cy = _height / 2;
+        var radius = Math.Min(_width, _height) * 2 / 5;
+
+        const int ticks = 12;
+        var tickSize = Math.Max(_width / 60, 6);
+        for (var i = 0; i < ticks; i++)
+        {
+            var angle = i * 2 * Math.PI / ticks;
+            var x = cx + (int)(Math.Cos(angle) * radius) - tickSize / 2;
+            var y = cy + (int)(Math.Sin(angle) * radius) - tickSize / 2;
+            FillRect(frame, x, y, tickSize, tickSize, 200);
+        }
+
+        // One turn every two seconds - slow enough to watch the hand cross each tick in turn.
+        var handAngle = t * Math.PI;
+        var stamp = Math.Max(_width / 90, 4);
+        for (var r = 0; r < radius; r += Math.Max(stamp / 2, 2))
+        {
+            var x = cx + (int)(Math.Cos(handAngle) * r) - stamp / 2;
+            var y = cy + (int)(Math.Sin(handAngle) * r) - stamp / 2;
+            FillRect(frame, x, y, stamp, stamp, 245);
+        }
+    }
+
+    /// <summary>The frame counter as a binary ladder in the top-left corner: one square per bit.</summary>
+    private unsafe void PaintFrameLadder(AVFrame* frame, long index)
+    {
         var square = Math.Max(_width / 36, 8);
         for (var bit = 0; bit < 10; bit++)
         {
@@ -336,6 +466,36 @@ public sealed class DemoSource : IMirrorSource
         var x1 = Math.Min(x + width, _width);
         for (var row = Math.Max(y, 0); row < Math.Min(y + height, _height); row++)
             new Span<byte>(plane + (long)row * stride + x, x1 - x).Fill(luma);
+    }
+
+    /// <summary>Like <see cref="FillRect"/>, but paints the chroma too - for a solid block of
+    /// colour rather than a grey one.</summary>
+    private unsafe void FillArea(AVFrame* frame, int x, int y, int width, int height, byte luma, byte u, byte v)
+    {
+        var lumaPlane = frame->data[0];
+        var cb = frame->data[1];
+        var cr = frame->data[2];
+        var lumaStride = frame->linesize[0];
+        var chromaStride = frame->linesize[1];
+
+        var x0 = Math.Clamp(x, 0, _width);
+        var x1 = Math.Clamp(x + width, 0, _width);
+        if (x1 <= x0) return;
+
+        for (var row = Math.Max(y, 0); row < Math.Min(y + height, _height); row++)
+        {
+            new Span<byte>(lumaPlane + (long)row * lumaStride + x0, x1 - x0).Fill(luma);
+            if ((row & 1) == 0)
+            {
+                var cx0 = x0 / 2;
+                var cx1 = x1 / 2;
+                if (cx1 > cx0)
+                {
+                    new Span<byte>(cb + (long)(row / 2) * chromaStride + cx0, cx1 - cx0).Fill(u);
+                    new Span<byte>(cr + (long)(row / 2) * chromaStride + cx0, cx1 - cx0).Fill(v);
+                }
+            }
+        }
     }
 
     private static (double R, double G, double B) HsvToRgb(double hue, double saturation, double value)

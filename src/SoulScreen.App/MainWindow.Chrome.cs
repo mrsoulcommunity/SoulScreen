@@ -42,6 +42,7 @@ public partial class MainWindow
         KeyDown += OnKeyDown;
         PreviewKeyDown += OnPreviewKeyDown;
         StateChanged += OnWindowStateChanged;
+        SizeChanged += OnWindowSizeChanged;
 
         SourceInitialized += (_, _) =>
         {
@@ -179,6 +180,15 @@ public partial class MainWindow
     private static void HideWhenCramped(TextBlock label) =>
         label.SizeChanged += (_, _) => label.Opacity = label.ActualWidth < 24 ? 0 : 1;
 
+    private void OnWindowSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (_shuttingDown) return;
+        UpdateAspectLock();
+        UpdatePictureCorners();
+        PositionOverlays();
+        if (SettingsPanel.Visibility == Visibility.Visible) UpdateSettingsLayout();
+    }
+
     private void OnWindowStateChanged(object? sender, EventArgs e)
     {
         if (_isMiniPlayer && WindowState == WindowState.Maximized)
@@ -207,8 +217,11 @@ public partial class MainWindow
     /// fullscreen flag and the window state have settled: reading them separately left one
     /// maximise pass computing padding for a fullscreen that had just ended.
     /// </summary>
-    private void ApplyChromePadding() =>
+    private void ApplyChromePadding()
+    {
         RootGrid.Margin = _isFullscreen ? new Thickness(0) : WindowFrame.MaximisedPadding(this);
+        ApplyOverlayInsets();
+    }
 
     // ------------------------------------------------------------- fullscreen
 

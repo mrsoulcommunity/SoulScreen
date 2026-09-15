@@ -1330,6 +1330,10 @@
     <SolidColorBrush x:Key="NavRed" Color="#FFFF3B30" />
     <!-- Behind a capture opened in the viewer: dark whatever the theme, as a photo viewer is. -->
     <SolidColorBrush x:Key="ViewerBackground" Color="#F50B0B0C" />
+    <!-- Over the picture while a clip is being chosen: dark enough that the card on it reads. -->
+    <SolidColorBrush x:Key="ViewerScrim" Color="#A8000000" />
+    <!-- A card on the dark viewer: more opaque than a badge, so the words on it stay readable. -->
+    <SolidColorBrush x:Key="HudCard" Color="#F5141416" />
     <SolidColorBrush x:Key="HudHover" Color="#2EFFFFFF" />
     <SolidColorBrush x:Key="HudPressed" Color="#47FFFFFF" />
     <SolidColorBrush x:Key="HudSelected" Color="#3DFFFFFF" />
@@ -1438,6 +1442,41 @@
                         </Trigger>
                         <Trigger Property="IsChecked" Value="True">
                             <Setter TargetName="Root" Property="Background" Value="{StaticResource HudSelected}" />
+                        </Trigger>
+                    </ControlTemplate.Triggers>
+                </ControlTemplate>
+            </Setter.Value>
+        </Setter>
+    </Style>
+
+    <!-- A checkbox on the dark viewer: the window's own surfaces belong to the window behind it. -->
+    <Style x:Key="HudCheck" TargetType="CheckBox">
+        <Setter Property="Foreground" Value="{StaticResource HudText}" />
+        <Setter Property="FontFamily" Value="{StaticResource TextFont}" />
+        <Setter Property="FontSize" Value="12.5" />
+        <Setter Property="Cursor" Value="Hand" />
+        <Setter Property="FocusVisualStyle" Value="{x:Null}" />
+        <Setter Property="Template">
+            <Setter.Value>
+                <ControlTemplate TargetType="CheckBox">
+                    <StackPanel Orientation="Horizontal" Background="Transparent">
+                        <Border x:Name="Box" Width="18" Height="18" CornerRadius="5" Background="Transparent"
+                                BorderBrush="{StaticResource HudBorder}" BorderThickness="1" VerticalAlignment="Center">
+                            <TextBlock x:Name="Tick" Text="&#xE73E;" FontFamily="{StaticResource IconFont}" FontSize="11"
+                                       Foreground="{StaticResource HudText}" Opacity="0"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ContentPresenter Margin="9,0,0,0" VerticalAlignment="Center" />
+                    </StackPanel>
+                    <ControlTemplate.Triggers>
+                        <Trigger Property="IsChecked" Value="True">
+                            <Setter TargetName="Box" Property="Background" Value="{DynamicResource Accent}" />
+                            <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource Accent}" />
+                            <Setter TargetName="Tick" Property="Foreground" Value="{DynamicResource OnAccent}" />
+                            <Setter TargetName="Tick" Property="Opacity" Value="1" />
+                        </Trigger>
+                        <Trigger Property="IsMouseOver" Value="True">
+                            <Setter TargetName="Box" Property="BorderBrush" Value="{DynamicResource Accent}" />
                         </Trigger>
                     </ControlTemplate.Triggers>
                 </ControlTemplate>

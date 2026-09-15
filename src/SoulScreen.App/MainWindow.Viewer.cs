@@ -75,6 +75,7 @@ public partial class MainWindow
     {
         if (!IsViewerOpen) return;
         _viewerGeneration++;
+        CloseClipPanel();
         StopViewerMedia();
         StopViewerRepeat();
         _viewerLoop = false;
@@ -119,6 +120,10 @@ public partial class MainWindow
         ViewerNext.Visibility = _viewerIndex < _viewerItems.Count - 1 ? Visibility.Visible : Visibility.Hidden;
         ViewerMessage.Visibility = Visibility.Collapsed;
         ViewerImage.Source = null;
+        // Choosing a clip is about the capture that was on screen, not the one arriving.
+        CloseClipPanel();
+        // Only a recording can be cut down to a moment.
+        ViewerClipButton.Visibility = item.Kind == CaptureKind.Recording ? Visibility.Visible : Visibility.Collapsed;
         // The loop belongs to the clip it was switched on for.
         _viewerLoop = false;
         ViewerLoopButton.IsChecked = false;
@@ -150,7 +155,10 @@ public partial class MainWindow
             }
 
             ViewerImage.Source = picture.Image;
-            ViewerDetail.Text = $"{item.Detail} · {picture.Width}×{picture.Height} · {position}";
+            // A GIF shows one frame here; saying so is the difference between a clip that
+            // looks broken and one that is opened to be seen moving.
+            var animated = IsAnimatedImage(item.Path) ? " · opens animated in its app" : "";
+            ViewerDetail.Text = $"{item.Detail} · {picture.Width}×{picture.Height} · {position}{animated}";
             return;
         }
 
@@ -354,7 +362,8 @@ public partial class MainWindow
         StepViewer(key == Key.Left ? -1 : +1);
         var held = DateTime.UtcNow - _viewerRepeatSince;
         // Past the quiet period the schedule only ever quickens; the null case cannot recur.
-        _viewerRepeatTimer.Interval = RepeatRate.NextDelay(held) ?? TimeSpan.FromMilliseconds(RepeatRate.SlowStepMilliseconds);
+        if (_viewerRepeatTimer is not null)
+            _viewerRepeatTimer.Interval = RepeatRate.NextDelay(held) ?? TimeSpan.FromMilliseconds(RepeatRate.SlowStepMilliseconds);
     }
 
     private void StopViewerRepeat()
@@ -472,6 +481,10 @@ public partial class MainWindow
     /// <summary>The viewer's keys, taken before anything behind it sees them.</summary>
     private bool HandleViewerKey(KeyEventArgs e)
     {
+        // Saving a clip comes first: it acts on the capture the keys below would act on, and
+        // Delete most of all must not reach it through an open panel.
+        if (IsClipPanelOpen) return HandleClipPanelKey(e);
+
         // Only while nothing is laid over the viewer: its keys must never act on a capture that
         // cannot be seen - Delete least of all.
         if (!IsViewerOpen || PaletteOverlay.Visibility == Visibility.Visible || IsWelcomeOpen
@@ -501,6 +514,9 @@ public partial class MainWindow
             case Key.End: StepViewer(_viewerItems.Count - 1 - _viewerIndex); return true;
             case Key.Space: ToggleViewerPlayback(); return true;
             case Key.L: ViewerLoopButton.IsChecked = ViewerLoopButton.IsChecked != true; OnViewerLoopToggle(ViewerLoopButton, new RoutedEventArgs()); return true;
+            case Key.C when CurrentViewerItem() is { Kind: CaptureKind.Recording }:
+                OpenClipPanel();
+                return true;
             // Once per press: held down, the key's auto-repeat recycled a whole run of captures.
             case Key.Delete:
                 if (!e.IsRepeat) _ = DeleteViewerItemAsync();

@@ -124,6 +124,11 @@ public sealed unsafe class AudioDecoder : IDisposable
             {
                 ErrorCount++;
                 _log.Trace($"audio packet rejected: {FFmpegRuntime.DescribeError(sent)}");
+                // A malformed packet can leave FFmpeg's input queue in a non-progressing
+                // state. Flush only that decoder state so the next valid packet can still
+                // produce audio; the receiver must not lose the whole session to one bad
+                // encrypted datagram.
+                ffmpeg.avcodec_flush_buffers(_context);
                 return [];
             }
         }
@@ -136,6 +141,8 @@ public sealed unsafe class AudioDecoder : IDisposable
             if (received < 0)
             {
                 ErrorCount++;
+                _log.Trace($"audio frame rejected: {FFmpegRuntime.DescribeError(received)}");
+                ffmpeg.avcodec_flush_buffers(_context);
                 break;
             }
 

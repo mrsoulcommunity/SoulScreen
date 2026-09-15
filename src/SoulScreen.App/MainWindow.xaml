@@ -227,6 +227,12 @@
                         <MenuItem x:Name="MenuMute" Header="Mute" InputGestureText="Ctrl+M" Click="OnMenuMute" />
                         <MenuItem x:Name="MenuStats" Header="Show statistics" InputGestureText="Ctrl+I" Click="OnMenuStats" />
                         <MenuItem x:Name="MenuPin" Header="Keep on top" InputGestureText="Ctrl+T" Click="OnMenuPin" />
+                        <Separator x:Name="MenuDemoPatternSeparator" />
+                        <MenuItem x:Name="MenuDemoPattern" Header="Demo pattern">
+                            <MenuItem x:Name="MenuDemoMotion" Header="Motion test" Tag="MotionTest" Click="OnMenuDemoPattern" />
+                            <MenuItem x:Name="MenuDemoColorBars" Header="Color bars" Tag="ColorBars" Click="OnMenuDemoPattern" />
+                            <MenuItem x:Name="MenuDemoRefresh" Header="Refresh-rate checker" Tag="RefreshRateChecker" Click="OnMenuDemoPattern" />
+                        </MenuItem>
                         <Separator />
                         <MenuItem Header="Disconnect iPhone" InputGestureText="Ctrl+D" Click="OnDisconnect" />
                     </ContextMenu>
@@ -295,6 +301,18 @@
                         <TextBlock Text="Paused" Margin="7,0,0,0" VerticalAlignment="Center" />
                     </StackPanel>
                 </Button>
+                <!-- The phone dropped: the picture waits for it, and the recording keeps
+                     running, so this says what is happening rather than what has ended. -->
+                <Border x:Name="ReconnectPill" Visibility="Collapsed" Margin="4,0" Background="{StaticResource HudBackground}"
+                        BorderBrush="{StaticResource HudBorder}" BorderThickness="1" CornerRadius="14" Padding="11,5"
+                        TextElement.Foreground="{StaticResource HudText}" IsHitTestVisible="False">
+                    <StackPanel Orientation="Horizontal">
+                        <Ellipse x:Name="ReconnectPillDot" Width="8" Height="8" Fill="{StaticResource HudRecord}"
+                                 VerticalAlignment="Center" />
+                        <TextBlock x:Name="ReconnectPillText" Margin="7,0,0,0" FontSize="12" FontWeight="SemiBold"
+                                   VerticalAlignment="Center" />
+                    </StackPanel>
+                </Border>
             </StackPanel>
 
             <!-- Shown while the picture is zoomed, so the user knows why it does not fit. Top
@@ -531,7 +549,18 @@
 
                         <!-- A way to see the picture path working with no phone in the room. -->
                         <Button x:Name="DemoLink" Style="{StaticResource LinkButton}" Content="Try a demo without a phone"
-                                HorizontalAlignment="Center" Margin="0,14,0,0" Visibility="Collapsed" Click="OnStartDemo" />
+                                HorizontalAlignment="Center" Margin="0,14,0,0" Visibility="Collapsed" Click="OnDemoLink">
+                            <Button.ContextMenu>
+                                <ContextMenu x:Name="DemoMenu">
+                                    <MenuItem Header="Motion test" Tag="MotionTest" Click="OnStartDemoPattern"
+                                              ToolTip="A bouncing shape and a moving bar - shows dropped or stuttered frames" />
+                                    <MenuItem Header="Color bars" Tag="ColorBars" Click="OnStartDemoPattern"
+                                              ToolTip="Reference colours and a grey-scale ramp - checks colour and banding" />
+                                    <MenuItem Header="Refresh-rate checker" Tag="RefreshRateChecker" Click="OnStartDemoPattern"
+                                              ToolTip="A hand sweeping past fixed ticks - shows the display holding or skipping frames" />
+                                </ContextMenu>
+                            </Button.ContextMenu>
+                        </Button>
 
                         <!-- The question every mirroring app is asked most, answered by reading this PC. -->
                         <Button x:Name="DoctorLink" Style="{StaticResource LinkButton}" Content="iPhone can't find this PC?"
@@ -1318,6 +1347,11 @@
                                     AutomationProperties.Name="Show in folder" Click="OnViewerReveal" />
                             <Button Style="{StaticResource HudButton}" Content="&#xE8A7;" ToolTip="Open in its app"
                                     AutomationProperties.Name="Open in its app" Click="OnViewerOpenExternal" />
+                            <!-- Only a recording can be cut down to a moment, so this appears for
+                                 recordings alone. -->
+                            <Button x:Name="ViewerClipButton" Style="{StaticResource HudButton}" Content="&#xE8C6;"
+                                    Visibility="Collapsed" ToolTip="Save a moment as a GIF or WebM (C)"
+                                    AutomationProperties.Name="Save a clip" Click="OnViewerClip" />
                             <ToggleButton x:Name="ViewerLoopButton" Style="{StaticResource HudToggle}" Content="&#xE8D1;"
                                           ToolTip="Play in a loop (L)" AutomationProperties.Name="Play in a loop"
                                           Click="OnViewerLoopToggle" />
@@ -1357,6 +1391,70 @@
                                 ValueChanged="OnViewerScrubberChanged" />
                         <TextBlock x:Name="ViewerDuration" Grid.Column="3" FontFamily="{StaticResource MonoFont}" FontSize="11.5"
                                    Foreground="{StaticResource HudTextDim}" VerticalAlignment="Center" Margin="10,0,0,0" />
+                    </Grid>
+
+                    <!-- ======================= saving a clip =======================
+                         A moment of a recording, as an animation. Laid over the whole viewer
+                         because the moment is chosen with the player underneath: the scrubber
+                         is how the user says where, and the panel reads it when the clip is
+                         made. -->
+                    <Grid x:Name="ViewerClipPanel" Grid.RowSpan="3" Visibility="Collapsed" Panel.ZIndex="40"
+                          Background="{StaticResource ViewerScrim}" KeyboardNavigation.TabNavigation="Cycle"
+                          AutomationProperties.Name="Save a clip">
+                        <Border Background="{StaticResource HudCard}" BorderBrush="{StaticResource HudBorder}"
+                                BorderThickness="1" CornerRadius="12" Padding="18,16" MaxWidth="380" Margin="24"
+                                HorizontalAlignment="Center" VerticalAlignment="Center">
+                            <StackPanel>
+                                <TextBlock Text="Save a clip" FontSize="14.5" FontWeight="SemiBold"
+                                           Foreground="{StaticResource HudText}" />
+                                <TextBlock x:Name="ViewerClipFrom" FontSize="12" Foreground="{StaticResource HudTextDim}"
+                                           TextWrapping="Wrap" Margin="0,3,0,0" />
+
+                                <TextBlock Text="Length" FontSize="12" Foreground="{StaticResource HudTextDim}" Margin="0,16,0,2" />
+                                <Grid>
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <Slider x:Name="ViewerClipLength" Style="{StaticResource ScrubSlider}" Minimum="2" Maximum="15"
+                                            Value="5" SmallChange="1" LargeChange="5" TickFrequency="1" IsSnapToTickEnabled="True"
+                                            AutomationProperties.Name="Length of the clip"
+                                            ValueChanged="OnViewerClipChanged" />
+                                    <TextBlock x:Name="ViewerClipLengthText" Grid.Column="1" MinWidth="34" Margin="10,0,0,0"
+                                               FontFamily="{StaticResource MonoFont}" FontSize="11.5"
+                                               Foreground="{StaticResource HudText}" VerticalAlignment="Center"
+                                               HorizontalAlignment="Right" />
+                                </Grid>
+
+                                <TextBlock Text="Format" FontSize="12" Foreground="{StaticResource HudTextDim}" Margin="0,16,0,2" />
+                                <StackPanel Orientation="Horizontal">
+                                    <RadioButton x:Name="ViewerClipGif" Style="{StaticResource HudTool}" GroupName="ViewerClipFormat"
+                                                 Width="56" Content="GIF" FontFamily="{StaticResource TextFont}" FontSize="12"
+                                                 FontWeight="SemiBold" IsChecked="True" Checked="OnViewerClipChanged"
+                                                 ToolTip="Plays anywhere, and is the larger file" AutomationProperties.Name="GIF" />
+                                    <RadioButton x:Name="ViewerClipWebM" Style="{StaticResource HudTool}" GroupName="ViewerClipFormat"
+                                                 Width="64" Content="WebM" FontFamily="{StaticResource TextFont}" FontSize="12"
+                                                 FontWeight="SemiBold" Checked="OnViewerClipChanged"
+                                                 ToolTip="A fraction of the size, and needs a modern player" AutomationProperties.Name="WebM" />
+                                </StackPanel>
+
+                                <CheckBox x:Name="ViewerClipCopy" Style="{StaticResource HudCheck}" IsChecked="True" Margin="0,16,0,0"
+                                          Content="Copy it when it is ready" AutomationProperties.Name="Copy the clip when it is ready" />
+
+                                <TextBlock x:Name="ViewerClipProgress" Visibility="Collapsed" FontSize="12"
+                                           Foreground="{StaticResource HudTextDim}" Margin="0,12,0,0" />
+                                <TextBlock x:Name="ViewerClipError" Visibility="Collapsed" FontSize="12" TextWrapping="Wrap"
+                                           Foreground="{DynamicResource Danger}" Margin="0,12,0,0" />
+
+                                <StackPanel Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,18,0,0">
+                                    <Button x:Name="ViewerClipCancel" Style="{StaticResource HudPill}" Content="Cancel"
+                                            Click="OnViewerClipCancel" AutomationProperties.Name="Cancel" />
+                                    <Button x:Name="ViewerClipSave" Style="{StaticResource HudDone}" Margin="10,0,0,0"
+                                            Content="Save the clip" Click="OnViewerClipSave"
+                                            AutomationProperties.Name="Save the clip" />
+                                </StackPanel>
+                            </StackPanel>
+                        </Border>
                     </Grid>
                 </Grid>
             </Border>
