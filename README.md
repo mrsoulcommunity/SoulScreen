@@ -1,6 +1,19 @@
+<div align="center">
+
+<img src="src/SoulScreen.App/Assets/SoulScreen.svg" width="96" height="96" alt="SoulScreen icon">
+
 # SoulScreen
 
-Mirror an iPhone screen onto Windows.
+**Mirror an iPhone screen onto Windows.**
+
+[![Release](https://img.shields.io/github/v/release/mrsoulcommunity/SoulScreen?label=release&color=0e0f13)](https://github.com/mrsoulcommunity/SoulScreen/releases/latest)
+[![Platform](https://img.shields.io/badge/platform-Windows%2011%20x64-0e0f13)](#requirements)
+[![.NET](https://img.shields.io/badge/.NET-8.0-512BD4)](#building-from-source)
+[![Tests](https://img.shields.io/badge/tests-240%20passing-2ea043)](#testing)
+
+</div>
+
+---
 
 Two transports, one app:
 
@@ -10,6 +23,19 @@ Two transports, one app:
   latency, no FairPlay, but needs a driver swap on Windows. *(in progress)*
 
 Windows 11, .NET 8, x64.
+
+## Contents
+
+- [Status](#status)
+- [Download](#download)
+- [Requirements](#requirements)
+- [Building from source](#building-from-source)
+- [Usage](#usage)
+- [Why there is a native helper](#why-there-is-a-native-helper)
+- [Layout](#layout)
+- [Testing](#testing)
+- [Troubleshooting](#troubleshooting)
+- [Licence and scope](#licence-and-scope)
 
 ---
 
@@ -29,7 +55,10 @@ phone's screen at 498x1080 / 59.9 fps.
 | Audio (AAC-ELD decode and playback) | working |
 | Recording to MP4 | working — video remuxed, audio re-encoded to AAC |
 | Light and dark themes, eight accent colours | working — follows Windows, or set by hand |
-| Command palette, mini player, captures gallery | working |
+| Command palette, mini player with its own menu, captures gallery | working |
+| Session summary on disconnect, with what the session produced | working |
+| Focus mode (Ctrl+H): only the picture, nothing over it | working |
+| Sustained poor-connection advice, offered once, not on every hiccup | working |
 | Markup: pen, highlighter and laser pointer over the picture | working |
 | Captures viewer, with recordings played in place | working |
 | Ask before an iPhone mirrors; allowed and blocked iPhones | working |
@@ -41,17 +70,39 @@ phone's screen at 498x1080 / 59.9 fps.
 
 ---
 
-## Getting started
+## Download
+
+Grab the latest build from **[Releases](https://github.com/mrsoulcommunity/SoulScreen/releases/latest)**
+— a self-contained `.zip` for Windows 11 x64. No .NET install required: unzip anywhere
+and run `SoulScreen.App.exe`.
+
+On first connection, allow it through Windows Firewall when Windows asks, or run
+`tools/firewall.ps1` from an elevated PowerShell prompt.
+
+Prefer to build it yourself instead? See [Building from source](#building-from-source).
+
+---
+
+## Requirements
+
+- Windows 11, x64
+- An iPhone on the same Wi-Fi subnet as this PC (a "guest" or client-isolated network won't work)
+- To build from source: the [.NET 8 SDK](https://dotnet.microsoft.com/download/dotnet/8.0), and a C
+  compiler if you want the FairPlay helper — see [Why there is a native helper](#why-there-is-a-native-helper)
+
+---
+
+## Building from source
 
 ```powershell
 # 1. Build
 dotnet build
 
 # 2. Build the FairPlay helper (needed for wireless mirroring - see below)
-pwsh tools/build-fairplay.ps1
+.\tools\build-fairplay.ps1
 
 # 3. Allow the phone through Windows Firewall (elevated PowerShell)
-pwsh tools/firewall.ps1
+.\tools\firewall.ps1
 
 # 4. Run the receiver
 dotnet run --project src/SoulScreen.Cli -- serve --dump capture
@@ -66,9 +117,16 @@ one runs at a time.
 For a build you can keep and run without the source tree:
 
 ```powershell
-pwsh tools/publish.ps1                 # framework-dependent, ~110 MB
-pwsh tools/publish.ps1 -SelfContained  # bundles the .NET runtime too
+.\tools\publish.ps1                 # framework-dependent, ~110 MB
+.\tools\publish.ps1 -SelfContained  # bundles the .NET runtime too
 ```
+
+All `tools/*.ps1` scripts run under the Windows PowerShell (5.1) that ships with Windows —
+no separate PowerShell 7/`pwsh` install needed.
+
+---
+
+## Usage
 
 ### In the app
 
@@ -91,6 +149,7 @@ pwsh tools/publish.ps1 -SelfContained  # bundles the .NET runtime too
 | `Ctrl+I` | Statistics overlay |
 | `Ctrl+T` | Keep the window on top |
 | `Ctrl+D` | Disconnect the phone |
+| `Ctrl+H` | Focus mode: toolbar and status bar away; `Esc` or `Ctrl+H` brings them back |
 | `Ctrl+L` `Ctrl+,` | Activity log, settings |
 | `Ctrl+Alt+Shift+S` `R` `M` `O` | From any app, once switched on: screenshot, record, mini player, show the window |
 | `F1` | The list above, in the app |
@@ -123,8 +182,9 @@ and the connection all keep going, and resuming lands on the live picture, not o
 ### Captures
 
 `Ctrl+G` shows every screenshot and recording in the capture folder. Click one
-to look at it without leaving the app: the arrow keys step through the rest, `Space` plays a
-recording and `Delete` sends the one on screen to the Recycle Bin. Drag a tile out to drop the
+to look at it without leaving the app: the arrow keys step through the rest - held down, they
+speed up - `Space` plays a recording, `L` loops it until switched off, and `Delete` sends the one
+on screen to the Recycle Bin. Drag a tile out to drop the
 file into Explorer or a chat; right-click, or `Ctrl+C` and `Delete` on a focused tile, to copy it (as the file,
 and as the picture for a screenshot), find it in Explorer, or move it to the Recycle Bin. Only
 files SoulScreen named are listed, so pointing the capture folder at Pictures does not bring

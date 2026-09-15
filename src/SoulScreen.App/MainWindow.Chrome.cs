@@ -462,6 +462,7 @@ public partial class MainWindow
             case Key.I: ToggleStats(); break;
             case Key.T: PinButton.IsChecked = PinButton.IsChecked != true; break;
             case Key.L: LogButton.IsChecked = LogButton.IsChecked != true; break;
+            case Key.H: ToggleFocusMode(); break;
             case Key.OemComma: SettingsButton.IsChecked = SettingsButton.IsChecked != true; break;
             case Key.D: DisconnectDevice(); break;
             case Key.OemPlus or Key.Add: ZoomBy(1.25, null); break;
@@ -525,6 +526,7 @@ public partial class MainWindow
         if (SettingsPanel.Visibility == Visibility.Visible) { SettingsButton.IsChecked = false; return true; }
         if (MarkupColorButton.IsChecked == true) { MarkupColorButton.IsChecked = false; return true; }
         if (IsMarkupActive) { MarkupButton.IsChecked = false; return true; }
+        if (_focusMode) { SetFocusMode(false); return true; }
         if (_isMiniPlayer) { ExitMiniPlayer(); return true; }
         if (_isFullscreen) { ToggleFullscreen(); return true; }
         if (IsZoomed) { ResetZoom(); return true; }
@@ -572,6 +574,7 @@ public partial class MainWindow
         ("Ctrl+0", "Reset the zoom"),
         ("Ctrl+I", "Statistics overlay"),
         ("Ctrl+T", "Keep the window on top"),
+        ("Ctrl+H", "Focus mode: hide the chrome; Esc or Ctrl+H brings it back"),
         ("Ctrl+L", "Activity log"),
         ("Ctrl+,", "Settings"),
         ("Ctrl+Alt+Shift+S", "Screenshot from any app, once switched on"),

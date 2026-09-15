@@ -112,8 +112,10 @@ public partial class MainWindow
         MiniControls.Visibility = Visibility.Collapsed;
         _miniControlsShown = false;
 
-        Toolbar.Visibility = Visibility.Visible;
-        StatusBar.Visibility = Visibility.Visible;
+        // Focus mode asked for the strips to be gone; the mini player only borrowed the idea.
+        var chrome = _focusMode ? Visibility.Collapsed : Visibility.Visible;
+        Toolbar.Visibility = chrome;
+        StatusBar.Visibility = chrome;
 
         // A refresh-rate notice put away with the toolbar comes back with it.
         if (!_noticeDismissed && VideoHost.Visibility == Visibility.Visible

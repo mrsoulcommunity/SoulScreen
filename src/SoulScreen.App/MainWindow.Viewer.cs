@@ -32,6 +32,15 @@ public partial class MainWindow
     private bool _viewerPlaying;
     private bool _viewerUpdatingScrubber;
 
+    /// <summary>Play a recording again from the start when it ends, until it is switched off.</summary>
+    private bool _viewerLoop;
+
+    /// <summary>Press-and-hold on the viewer's arrows: the key that is down, when it went down,
+    /// and how fast it is now stepping. One hold at a time, the way a media player does it.</summary>
+    private Key? _viewerRepeatKey;
+    private DateTime _viewerRepeatSince;
+    private DispatcherTimer? _viewerRepeatTimer;
+
     private bool IsViewerOpen => ViewerPanel.Visibility == Visibility.Visible;
 
     private CaptureItem? CurrentViewerItem() =>
@@ -67,6 +76,8 @@ public partial class MainWindow
         if (!IsViewerOpen) return;
         _viewerGeneration++;
         StopViewerMedia();
+        StopViewerRepeat();
+        _viewerLoop = false;
         ViewerImage.Source = null;
         ViewerPanel.Visibility = Visibility.Collapsed;
         _viewerItems = [];
@@ -108,6 +119,10 @@ public partial class MainWindow
         ViewerNext.Visibility = _viewerIndex < _viewerItems.Count - 1 ? Visibility.Visible : Visibility.Hidden;
         ViewerMessage.Visibility = Visibility.Collapsed;
         ViewerImage.Source = null;
+        // The loop belongs to the clip it was switched on for.
+        _viewerLoop = false;
+        ViewerLoopButton.IsChecked = false;
+        UpdateViewerLoopButton();
 
         if (item.Kind == CaptureKind.Screenshot)
         {
@@ -227,6 +242,14 @@ public partial class MainWindow
 
     private void OnViewerMediaEnded(object sender, RoutedEventArgs e)
     {
+        // Loop plays it again from the top, for a clip being watched over and over.
+        if (_viewerLoop)
+        {
+            ViewerMedia.Position = TimeSpan.Zero;
+            ViewerMedia.Play();
+            return;
+        }
+
         ViewerMedia.Pause();
         _viewerPlaying = false;
         UpdateViewerPlayButton();
@@ -240,6 +263,20 @@ public partial class MainWindow
     }
 
     private void OnViewerPlayPause(object sender, RoutedEventArgs e) => ToggleViewerPlayback();
+
+    /// <summary>Loop this recording: when it ends it starts again, until switched off.
+    /// Switched off by closing the viewer or moving to another capture.</summary>
+    private void OnViewerLoopToggle(object sender, RoutedEventArgs e)
+    {
+        _viewerLoop = ViewerLoopButton.IsChecked == true;
+        UpdateViewerLoopButton();
+    }
+
+    private void UpdateViewerLoopButton()
+    {
+        ViewerLoopButton.ToolTip = _viewerLoop ? "Looping on (L)" : "Play in a loop (L)";
+        System.Windows.Automation.AutomationProperties.SetName(ViewerLoopButton, _viewerLoop ? "Looping on" : "Play in a loop");
+    }
 
     private void ToggleViewerPlayback()
     {
@@ -277,6 +314,53 @@ public partial class MainWindow
         var timer = new DispatcherTimer { Interval = TimeSpan.FromMilliseconds(200) };
         timer.Tick += (_, _) => UpdateViewerClock();
         return timer;
+    }
+
+    /// <summary>Begins a hold on one of the viewer's arrows: the step for the press itself,
+    /// then timer-driven steps that quicken the longer the key stays down. One hold at a
+    /// time; the key's own auto-repeat is ignored.</summary>
+    private void StartViewerRepeat(Key key)
+    {
+        var delta = key == Key.Left ? -1 : +1;
+        StepViewer(delta);
+        _viewerRepeatKey = key;
+        _viewerRepeatSince = DateTime.UtcNow;
+
+        if (_viewerRepeatTimer is null)
+        {
+            _viewerRepeatTimer = new DispatcherTimer(DispatcherPriority.Input);
+            _viewerRepeatTimer.Tick += (_, _) => OnViewerRepeatTick();
+        }
+        // The first repeat waits out the quiet period, so a quick tap is never doubled.
+        _viewerRepeatTimer.Interval = RepeatRate.SlowPeriod;
+        _viewerRepeatTimer.Start();
+    }
+
+    private void OnViewerRepeatTick()
+    {
+        if (_viewerRepeatKey is not { } key)
+        {
+            _viewerRepeatTimer?.Stop();
+            return;
+        }
+
+        // The key came up, or the hold left the viewer: stop where it is.
+        if (Keyboard.GetKeyStates(key) == KeyStates.None || !IsViewerOpen)
+        {
+            StopViewerRepeat();
+            return;
+        }
+
+        StepViewer(key == Key.Left ? -1 : +1);
+        var held = DateTime.UtcNow - _viewerRepeatSince;
+        // Past the quiet period the schedule only ever quickens; the null case cannot recur.
+        _viewerRepeatTimer.Interval = RepeatRate.NextDelay(held) ?? TimeSpan.FromMilliseconds(RepeatRate.SlowStepMilliseconds);
+    }
+
+    private void StopViewerRepeat()
+    {
+        _viewerRepeatKey = null;
+        _viewerRepeatTimer?.Stop();
     }
 
     private void UpdateViewerClock()
@@ -406,11 +490,17 @@ public partial class MainWindow
         if (modifiers != ModifierKeys.None) return false;
         switch (e.Key)
         {
-            case Key.Left: StepViewer(-1); return true;
-            case Key.Right: StepViewer(+1); return true;
+            // Press-and-hold steps fast: the first press acts at once, a pause follows so a
+            // quick tap is never mistaken for a hold, and a key that stays down speeds up.
+            // Windows' own auto-repeat is ignored - the timer fires whether Windows repeats
+            // or not, at a pace this viewer chooses.
+            case Key.Left or Key.Right:
+                if (!e.IsRepeat) StartViewerRepeat(e.Key);
+                return true;
             case Key.Home: StepViewer(-_viewerIndex); return true;
             case Key.End: StepViewer(_viewerItems.Count - 1 - _viewerIndex); return true;
             case Key.Space: ToggleViewerPlayback(); return true;
+            case Key.L: ViewerLoopButton.IsChecked = ViewerLoopButton.IsChecked != true; OnViewerLoopToggle(ViewerLoopButton, new RoutedEventArgs()); return true;
             // Once per press: held down, the key's auto-repeat recycled a whole run of captures.
             case Key.Delete:
                 if (!e.IsRepeat) _ = DeleteViewerItemAsync();

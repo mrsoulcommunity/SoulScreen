@@ -270,6 +270,8 @@ public partial class MainWindow
         yield return new(LogPanel.Visibility == Visibility.Visible ? "Hide the activity log" : "Activity log", "Go to", "", "Ctrl+L",
             () => LogButton.IsChecked = LogButton.IsChecked != true, "log debug trace diagnostics");
         yield return new("Keyboard shortcuts", "Go to", "", "F1", ToggleHelp, "keys help");
+        yield return new(_focusMode ? "Leave focus mode" : "Focus mode", "Window", "", "Ctrl+H", ToggleFocusMode,
+            "focus hide chrome clean view presentation only the picture nothing else distraction");
         yield return new(_settings.ShowPerformanceGraph ? "Hide the performance graph" : "Show the performance graph", "Go to", "",
             null, () => SetShowPerformanceGraph(!_settings.ShowPerformanceGraph), "sparkline fps graph overlay statistics performance");
 

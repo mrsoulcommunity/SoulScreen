@@ -623,8 +623,12 @@ public partial class MainWindow
         Dispatcher.BeginInvoke(() =>
         {
             RecordButton.IsChecked = false;
+            var bytes = 0L;
+            try { bytes = new FileInfo(path).Length; } catch { /* the size only feeds the session summary */ }
+            _sessionTally.AddRecording(bytes);
             ShowTransientStatus($"Saved {Path.GetFileName(path)}", path);
-            ShowToast("Recording saved", "\uE714", "View", ShowCaptures);
+            ShowToast(bytes > 0 ? $"Recording saved - {SessionSummary.DescribeSize(bytes)}" : "Recording saved",
+                "\uE714", "View", ShowCaptures);
             _log.Info($"recording saved to {path}");
             RefreshCapturesIfOpen();
         });
@@ -757,6 +761,7 @@ public partial class MainWindow
 
             // After the toast, so a clipboard that is busy is what the user is told about.
             if (_settings.CopyScreenshotToClipboard) TrySetClipboardImage(snapshot);
+            _sessionTally.AddScreenshot();
             return true;
         }
         catch (Exception ex)

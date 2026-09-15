@@ -204,6 +204,10 @@ public partial class MainWindow
     private readonly ConnectionQualityMeter _quality = new();
     private ConnectionQualityLevel? _qualityShown;
 
+    /// <summary>Watches for a connection that stays poor, and offers advice about it once,
+    /// rather than for every hiccup.</summary>
+    private readonly ConnectionAdvice _connectionAdvice = new();
+
     /// <summary>Feeds the meter this tick's running totals and redraws the bars if the verdict moved.</summary>
     private void UpdateQuality()
     {
@@ -213,8 +217,17 @@ public partial class MainWindow
         // talking, not the network.
         var videoLost = _pipeline.DroppedSampleCount + _pipeline.SkippedSampleCount;
         var audioLost = _audio is { } audio ? audio.FilledGapCount + audio.DroppedPacketCount : 0;
-        ShowQuality(_quality.Sample(TimeSpan.FromTicks(Stopwatch.GetTimestamp() * TimeSpan.TicksPerSecond / Stopwatch.Frequency),
-            videoLost, audioLost));
+        var level = _quality.Sample(TimeSpan.FromTicks(Stopwatch.GetTimestamp() * TimeSpan.TicksPerSecond / Stopwatch.Frequency),
+            videoLost, audioLost);
+        ShowQuality(level);
+
+        // Sustained poor is worth naming once; the occasional hiccup is not.
+        if (_connectionAdvice.ShouldAdvise(TimeSpan.FromTicks(Stopwatch.GetTimestamp() * TimeSpan.TicksPerSecond / Stopwatch.Frequency),
+                level == ConnectionQualityLevel.Poor))
+        {
+            ShowToast("The connection has been poor for a while - moving closer to the router, or a 5 GHz network, helps most", "");
+            _log.Warn("connection has been poor for some seconds; advice offered");
+        }
     }
 
     private void ShowQuality(ConnectionQualityLevel level)
@@ -405,6 +418,10 @@ public partial class MainWindow
         var device = ActiveSource?.Device;
         SetHud("Device", device is null ? "-" : device.Value.Model is null ? device.Value.Name : $"{device.Value.Name} ({device.Value.Model})");
         SetHud("Session", _sessionStartedUtc is { } started ? FormatDuration(DateTime.UtcNow - started) : "-");
+        SetHud("Screenshots", _sessionTally.Screenshots == 0 ? "-" : $"{_sessionTally.Screenshots} taken");
+        SetHud("Recordings", _sessionTally.Recordings == 0
+            ? "-"
+            : $"{_sessionTally.Recordings} made" + (_sessionTally.RecordedBytes > 0 ? $" · {_sessionTally.RecordedBytes / 1024.0 / 1024.0:0.#} MB" : ""));
         SetHud("Picture", Video.VideoSize.Width > 0
             ? $"{(int)Video.VideoSize.Width}x{(int)Video.VideoSize.Height}" + (_settings.Rotation != 0 ? $" ↻{_settings.Rotation}°" : "")
             : "-");

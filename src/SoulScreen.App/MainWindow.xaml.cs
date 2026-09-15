@@ -27,6 +27,9 @@ public partial class MainWindow : Window
     private readonly DispatcherTimer _metricsTimer;
     private readonly DispatcherTimer _toastTimer;
 
+    /// <summary>What this session has produced, for the summary when it ends.</summary>
+    private readonly SessionTally _sessionTally = new();
+
     private AppSettings _settings;
     private AirPlayReceiver? _receiver;
     private DemoSource? _demo;
@@ -85,6 +88,11 @@ public partial class MainWindow : Window
     private DateTime? _sessionStartedUtc;
     private SourceDeviceInfo? _sessionDevice;
 
+    /// <summary>Set when the user ends a session from this side - Disconnect, or stopping the
+    /// receiver - and read by the bookkeeping when the session actually ends, because the
+    /// state change arrives later and on its own.</summary>
+    private bool _userStopRequested;
+
     /// <summary>Which receiver session the decision in force - shown, asked about or turned away -
     /// was made for, so a phone that takes the receiver over from another is decided afresh.</summary>
     private DateTime? _decidedSessionKey;
@@ -103,6 +111,7 @@ public partial class MainWindow : Window
         InitialisePalette();
         InitialiseCaptures();
         InitialiseMiniPlayer();
+        InitialiseMiniMenu();
         InitialiseSettingsNav();
         InitialiseMarkup();
         InitialiseHotkeysAndTaskbar();
@@ -303,6 +312,9 @@ public partial class MainWindow : Window
     {
         var receiver = _receiver;
         _receiver = null;
+        // Unhooking the events means the session's end arrives through the cleanup below
+        // rather than the state handler; name the reason before they go.
+        if (VideoHost.Visibility == Visibility.Visible && !_sessionIsDemo) _userStopRequested = true;
         if (receiver is not null)
         {
             receiver.StateChanged -= OnReceiverStateChanged;
@@ -387,6 +399,7 @@ public partial class MainWindow : Window
         }
 
         if (_receiver?.Disconnect() != true) return;
+        _userStopRequested = true;
         ShowToast("Disconnecting the iPhone", "");
     }
 
@@ -477,7 +490,7 @@ public partial class MainWindow : Window
             switch (e.State)
             {
                 case MirrorSourceState.Ready:
-                    EndSessionBookkeeping();
+                    EndSessionBookkeeping(SessionEndReason.PhoneEnded);
                     SetIdleState("Waiting for your iPhone", "This PC is advertising itself on your network.", e.State);
                     break;
                 case MirrorSourceState.Connecting:
@@ -498,7 +511,7 @@ public partial class MainWindow : Window
                     if (sessionKey is not null && _decidedSessionKey is not null && sessionKey != _decidedSessionKey)
                     {
                         _log.Info("another device took the receiver over");
-                        EndSessionBookkeeping();
+                        EndSessionBookkeeping(SessionEndReason.TakenOver);
                         // The first phone's picture comes down before the second is decided on:
                         // left up, it went on being captured and recorded - showing the new
                         // phone - while that phone was still waiting to be allowed.
@@ -517,11 +530,11 @@ public partial class MainWindow : Window
                     break;
                 }
                 case MirrorSourceState.Faulted:
-                    EndSessionBookkeeping();
+                    EndSessionBookkeeping(SessionEndReason.Faulted);
                     SetIdleState("The receiver stopped", e.Message ?? "See the activity log.", e.State);
                     break;
                 default:
-                    EndSessionBookkeeping();
+                    EndSessionBookkeeping(SessionEndReason.PhoneEnded);
                     SetIdleState("Receiver stopped", "Start it when you are ready to mirror.", e.State);
                     break;
             }
@@ -557,6 +570,9 @@ public partial class MainWindow : Window
         _sessionStartedUtc = _receiver?.SessionStartedAtUtc ?? DateTime.UtcNow;
         _sessionDevice = device ?? ActiveSource?.Device;
         _sessionIsDemo = _demo is not null;
+        // A new session starts with empty counters, wherever the last one left them.
+        _sessionTally.Clear();
+        _connectionAdvice.Reset();
 
         if (_sessionIsDemo)
         {
@@ -591,15 +607,32 @@ public partial class MainWindow : Window
             RecordButton.IsChecked = true;
     }
 
-    /// <summary>Closes the books on a session: history, a toast, the timer.</summary>
-    private void EndSessionBookkeeping()
+    /// <summary>Closes the books on a session: history, a toast, the timer. The reason is
+    /// only words on the summary, so the four call sites that do not name one mean the phone
+    /// simply went away.</summary>
+    private void EndSessionBookkeeping(SessionEndReason reason = SessionEndReason.PhoneEnded)
     {
         _decidedSessionKey = null;
         if (_sessionStartedUtc is not { } started) return;
+        if (_userStopRequested && reason == SessionEndReason.PhoneEnded) reason = SessionEndReason.StoppedByUser;
+        _userStopRequested = false;
         var duration = DateTime.UtcNow - started;
         var device = _sessionDevice;
         _sessionStartedUtc = null;
         _sessionDevice = null;
+
+        // Focus mode would otherwise leave an empty black window where the session was.
+        LeaveFocusModeForSessionEnd();
+
+        var summary = new SessionSummary(
+            device?.Name ?? "iPhone",
+            duration,
+            _sessionTally.Screenshots,
+            _sessionTally.Recordings,
+            _sessionTally.RecordedBytes,
+            _sessionIsDemo,
+            reason);
+        _sessionTally.Clear();
 
         if (device is { } info && !_sessionIsDemo)
         {
@@ -609,8 +642,9 @@ public partial class MainWindow : Window
 
             if (!_shuttingDown)
             {
-                ShowToast($"{info.Name} disconnected", "");
-                NotifyFromTray($"{info.Name} disconnected", $"Mirrored for {FormatDuration(duration)}.");
+                var detail = summary.DeservesToast ? summary.Detail : null;
+                ShowToast(summary.Headline, "\uE8BB", detail is null ? null : "View", ShowCaptures);
+                NotifyFromTray($"{info.Name} disconnected", $"{summary.Headline}{(detail is null ? "" : $" - {detail}")}.");
             }
         }
     }

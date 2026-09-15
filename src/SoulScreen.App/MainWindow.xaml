@@ -366,11 +366,17 @@
                  window. The grid has no background, so everywhere but the buttons still reaches
                  the picture underneath, which is what the player is dragged by. -->
             <Grid x:Name="MiniControls" Visibility="Collapsed" Opacity="0" Panel.ZIndex="45">
+                <Grid.ContextMenu>
+                    <ContextMenu x:Name="MiniMenu" />
+                </Grid.ContextMenu>
                 <Border VerticalAlignment="Top" Height="58" Background="{StaticResource MiniScrimTop}" IsHitTestVisible="False" />
                 <Border VerticalAlignment="Bottom" Height="70" Background="{StaticResource MiniScrimBottom}" IsHitTestVisible="False" />
                 <Button Style="{StaticResource MiniButton}" Content="&#xEE47;" HorizontalAlignment="Right" VerticalAlignment="Top"
                         Margin="0,8,8,0" ToolTip="Back to the full window (Esc)" Click="OnToggleMiniPlayer"
                         AutomationProperties.Name="Leave the mini player" />
+                <Button Style="{StaticResource MiniButton}" Content="&#xE712;" HorizontalAlignment="Right" VerticalAlignment="Top"
+                        Margin="0,8,44,0" ToolTip="More" Click="OnMiniMenu"
+                        AutomationProperties.Name="More mini player options" />
                 <StackPanel Orientation="Horizontal" HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="0,0,0,10">
                     <Button x:Name="MiniMuteButton" Style="{StaticResource MiniButton}" Content="&#xE767;" Click="OnMiniMute"
                             ToolTip="Mute (Ctrl+M)" AutomationProperties.Name="Mute the phone's audio" />
@@ -1312,6 +1318,9 @@
                                     AutomationProperties.Name="Show in folder" Click="OnViewerReveal" />
                             <Button Style="{StaticResource HudButton}" Content="&#xE8A7;" ToolTip="Open in its app"
                                     AutomationProperties.Name="Open in its app" Click="OnViewerOpenExternal" />
+                            <ToggleButton x:Name="ViewerLoopButton" Style="{StaticResource HudToggle}" Content="&#xE8D1;"
+                                          ToolTip="Play in a loop (L)" AutomationProperties.Name="Play in a loop"
+                                          Click="OnViewerLoopToggle" />
                             <Button Style="{StaticResource HudButton}" Content="&#xE74D;" ToolTip="Move to the Recycle Bin (Delete)"
                                     AutomationProperties.Name="Move to the Recycle Bin" Click="OnViewerDelete" />
                             <Rectangle Width="1" Margin="6,8" Fill="{StaticResource HudBorder}" />
