@@ -417,6 +417,8 @@ public partial class MainWindow : Window
 
     // -------------------------------------------------------------------- demo
 
+    private void OnIdleSettings(object sender, RoutedEventArgs e) => SettingsButton.IsChecked = true;
+
     private void OnDemoLink(object sender, RoutedEventArgs e)
     {
         DemoMenu.PlacementTarget = DemoLink;

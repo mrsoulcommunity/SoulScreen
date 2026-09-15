@@ -5,7 +5,7 @@
         xmlns:controls="clr-namespace:SoulScreen.App.Controls"
         xmlns:shell="clr-namespace:System.Windows.Shell;assembly=PresentationFramework"
         Title="SoulScreen"
-        Height="760" Width="480"
+        Height="680" Width="920"
         MinHeight="420" MinWidth="360"
         Background="{DynamicResource Surface}"
         TextOptions.TextFormattingMode="Display"
@@ -546,6 +546,18 @@
                         <Button x:Name="ReceiverToggle" Style="{StaticResource GhostButton}"
                                 Content="Stop receiver" HorizontalAlignment="Center" MinWidth="150"
                                 Margin="0,20,0,0" Click="OnToggleReceiver" />
+
+                        <!-- Frequent destinations stay visible on the welcome surface, while the
+                             toolbar remains deliberately quiet. WrapPanel makes this remain usable
+                             at the compact 360 px minimum width too. -->
+                        <WrapPanel HorizontalAlignment="Center" Margin="0,18,0,0">
+                            <Button Style="{StaticResource SmallButton}" Content="Captures" Margin="0,0,6,6"
+                                    Click="OnMenuCaptures" AutomationProperties.Name="Open captures" />
+                            <Button Style="{StaticResource SmallButton}" Content="Settings" Margin="0,0,6,6"
+                                    Click="OnIdleSettings" AutomationProperties.Name="Open settings" />
+                            <Button Style="{StaticResource SmallButton}" Content="Connection check" Margin="0,0,0,6"
+                                    Click="OnShowDoctor" AutomationProperties.Name="Open connection check" />
+                        </WrapPanel>
 
                         <!-- A way to see the picture path working with no phone in the room. -->
                         <Button x:Name="DemoLink" Style="{StaticResource LinkButton}" Content="Try a demo without a phone"
