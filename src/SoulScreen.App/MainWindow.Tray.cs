@@ -26,29 +26,41 @@ public partial class MainWindow
         }
 
         _tray.ShowRequested += () => Dispatcher.BeginInvoke(RestoreFromTray);
-        _tray.ToggleReceiverRequested += () => Dispatcher.BeginInvoke(async () => await ToggleReceiverAsync());
-        _tray.DisconnectRequested += () => Dispatcher.BeginInvoke(DisconnectDevice);
+        _tray.ToggleReceiverRequested += () => Dispatcher.BeginInvoke(async () =>
+        {
+            if (IsLocked) return;
+            await ToggleReceiverAsync();
+        });
+        _tray.DisconnectRequested += () => Dispatcher.BeginInvoke(() =>
+        {
+            if (!IsLocked) DisconnectDevice();
+        });
         _tray.SettingsRequested += () => Dispatcher.BeginInvoke(() =>
         {
             RestoreFromTray();
+            if (IsLocked) return;
             SettingsButton.IsChecked = true;
         });
         _tray.ScreenshotRequested += () => Dispatcher.BeginInvoke(() =>
         {
+            if (IsLocked) return;
             if (SaveSnapshot()) NotifyFromTray("Screenshot saved", "It is in Captures.");
         });
         _tray.RecordRequested += () => Dispatcher.BeginInvoke(() =>
         {
+            if (IsLocked) return;
             if (RecordButton.IsEnabled) RecordButton.IsChecked = RecordButton.IsChecked != true;
         });
         _tray.MiniPlayerRequested += () => Dispatcher.BeginInvoke(() =>
         {
             RestoreFromTray();
+            if (IsLocked) return;
             ToggleMiniPlayer();
         });
         _tray.CapturesRequested += () => Dispatcher.BeginInvoke(() =>
         {
             RestoreFromTray();
+            if (IsLocked) return;
             ShowCaptures();
         });
         _tray.QuitRequested += () => Dispatcher.BeginInvoke(() =>
@@ -65,6 +77,13 @@ public partial class MainWindow
         if (_tray is null) return;
 
         _tray.Visible = _settings.MinimizeToTray || _settings.CloseToTray || _hiddenToTray;
+
+        if (IsLocked)
+        {
+            // Nothing about the mirrored phone leaks into the hover text while locked.
+            _tray.Update("locked", false, false, false);
+            return;
+        }
 
         var source = ActiveSource;
         var status = source?.State switch
@@ -92,6 +111,8 @@ public partial class MainWindow
         _hiddenToTray = true;
         _tray.Visible = true;
         Hide();
+
+        if (_settings.Lock is { Enabled: true, LockOnMinimizeToTray: true }) Lock();
 
         if (!_trayHintShown)
         {

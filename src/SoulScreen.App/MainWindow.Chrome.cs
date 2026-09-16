@@ -455,6 +455,10 @@ public partial class MainWindow
 
     private void OnKeyDown(object sender, KeyEventArgs e)
     {
+        // The lock screen owns the keyboard while it is up: nothing behind it - the palette,
+        // fullscreen, a shortcut - may act while SoulScreen is locked.
+        if (IsLocked) return;
+
         var inTextEntry = Keyboard.FocusedElement is TextBoxBase;
         var ctrl = Keyboard.Modifiers.HasFlag(ModifierKeys.Control);
         var shift = Keyboard.Modifiers.HasFlag(ModifierKeys.Shift);
@@ -546,6 +550,8 @@ public partial class MainWindow
     /// </summary>
     private void OnPreviewKeyDown(object sender, KeyEventArgs e)
     {
+        if (IsLocked) return;
+
         // The viewer's keys come first: nothing under it should also act on them.
         if (HandleViewerKey(e))
         {
@@ -569,7 +575,8 @@ public partial class MainWindow
         || HelpPanel.Visibility == Visibility.Visible
         || ViewerPanel.Visibility == Visibility.Visible
         || DoctorPanel.Visibility == Visibility.Visible
-        || WelcomeOverlay.Visibility == Visibility.Visible;
+        || WelcomeOverlay.Visibility == Visibility.Visible
+        || LockOverlay.Visibility == Visibility.Visible;
 
     /// <summary>Escape peels back one layer at a time: the palette, the welcome sheet, help, the
     /// viewer, the connection check, captures, settings, markup, the mini player, fullscreen, zoom,

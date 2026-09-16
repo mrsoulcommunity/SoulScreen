@@ -30,6 +30,7 @@ public sealed class AirPlayReceiver : IMirrorSource
         _identity = DeviceIdentity.LoadOrCreate(_options.StateDirectory);
 
         _handler = new AirPlayRequestHandler(_options, _identity);
+        SessionSources = new AirPlaySessionSourceProvider(_handler);
         _rtsp = new RtspServer(_handler, $"AirTunes/{_options.SourceVersion}") { Trace = _options.TraceProtocol };
         _responder = new MulticastDnsResponder { HostName = _options.DeviceName };
 
@@ -55,6 +56,17 @@ public sealed class AirPlayReceiver : IMirrorSource
     public SourceDeviceInfo? Device { get; private set; }
 
     public AirPlayOptions Options => _options;
+
+    /// <summary>The provider that turns every concurrent session into its own
+    /// <see cref="IMirrorSource"/>. The multi-device grid reads it; the single-session path    /// ignores it and keeps its own wiring.</summary>
+    public AirPlaySessionSourceProvider SessionSources { get; }
+
+    /// <summary>Highest number of concurrent sessions offered to the host, 1 to 8. The    /// default of 1 keeps the original behaviour; the multi-device toggle raises it.</summary>
+    public int MaximumSessions
+    {
+        get => SessionSources.MaximumSources;
+        set => SessionSources.MaximumSources = value;
+    }
 
     public DeviceIdentity Identity => _identity;
 
@@ -106,6 +118,7 @@ public sealed class AirPlayReceiver : IMirrorSource
         }
 
         SetState(MirrorSourceState.Ready);
+        RefreshSessionSources();
         _log.Info($"receiver \"{_options.DeviceName}\" ready on port {_rtsp.Port}");
     }
 
@@ -119,6 +132,8 @@ public sealed class AirPlayReceiver : IMirrorSource
         await _rtsp.StopAsync().ConfigureAwait(false);
         cts.Dispose();
 
+        SessionSources.Dispose();
+
         Device = null;
         SetState(MirrorSourceState.Stopped);
     }
@@ -130,6 +145,11 @@ public sealed class AirPlayReceiver : IMirrorSource
     /// <summary>Ends the current mirroring session from this side. The receiver stays up
     /// and advertised, so the phone can connect again straight away.</summary>
     public bool Disconnect() => _handler.DisconnectActiveSession();
+
+    /// <summary>Folds every session the provider holds into a fresh snapshot, so a host
+    /// that is only watching the plain state events still sees tiles appear. Called by
+    /// StartAsync once the sockets are up; a host with a periodic tick can also call it.</summary>
+    public void RefreshSessionSources() => SessionSources.Reconcile();
 
     /// <summary>When the session now streaming began, or null while nothing is.</summary>
     public DateTime? SessionStartedAtUtc => _handler.ActiveSession?.StartedAtUtc;

@@ -544,6 +544,78 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>The frame with the watermark laid over it, or the frame unchanged when the
+    /// watermark is off, has no image, or the image cannot be read. A screenshot must never
+    /// fail to save because of the watermark - at worst it is skipped for that shot.</summary>
+    private BitmapSource ComposeWatermark(BitmapSource frame)
+    {
+        var settings = _settings.Watermark;
+        if (!settings.Enabled || string.IsNullOrWhiteSpace(settings.ImagePath)) return frame;
+
+        var mark = LoadWatermarkImage(settings.ImagePath);
+        if (mark is null) return frame;
+
+        try
+        {
+            var (x, y, width, height) = WatermarkPlacement.Place(
+                frame.PixelWidth, frame.PixelHeight, mark.PixelWidth, mark.PixelHeight,
+                settings.Scale, settings.Corner, settings.MarginFraction);
+            if (width <= 0 || height <= 0) return frame;
+
+            var visual = new DrawingVisual();
+            using (var context = visual.RenderOpen())
+            {
+                context.DrawImage(frame, new Rect(0, 0, frame.PixelWidth, frame.PixelHeight));
+                context.PushOpacity(Math.Clamp(settings.Opacity, 0, 1));
+                context.DrawImage(mark, new Rect(x, y, width, height));
+                context.Pop();
+            }
+
+            var composed = new RenderTargetBitmap(frame.PixelWidth, frame.PixelHeight, 96, 96, PixelFormats.Pbgra32);
+            composed.Render(visual);
+            composed.Freeze();
+            return composed;
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("could not lay the watermark over the screenshot", ex);
+            return frame;
+        }
+    }
+
+    /// <summary>Cached decode of the watermark file, refreshed whenever its path or its own
+    /// last-write time changes - a replaced logo takes effect on the very next screenshot,
+    /// but an unchanged one is not re-read from disk on every single capture.</summary>
+    private (string Path, DateTime WrittenUtc, BitmapImage Image)? _watermarkCache;
+
+    private BitmapImage? LoadWatermarkImage(string path)
+    {
+        try
+        {
+            var writtenUtc = System.IO.File.GetLastWriteTimeUtc(path);
+            if (_watermarkCache is { } cached && cached.Path == path && cached.WrittenUtc == writtenUtc)
+                return cached.Image;
+
+            var image = new BitmapImage();
+            image.BeginInit();
+            image.CacheOption = BitmapCacheOption.OnLoad;
+            image.UriSource = new Uri(path, UriKind.Absolute);
+            image.EndInit();
+            image.Freeze();
+
+            _watermarkCache = (path, writtenUtc, image);
+            return image;
+        }
+        catch (Exception ex)
+        {
+            // Moved, deleted, or not actually an image: the setting stays on, but this
+            // screenshot - and every one after it until the file is fixed - goes out plain.
+            _log.Warn($"could not read the watermark image at {path}", ex);
+            _watermarkCache = null;
+            return null;
+        }
+    }
+
     // ------------------------------------------------------------------ keyboard
 
     /// <summary>The markup keys: Ctrl+Z to undo, and a letter for each tool, as Preview's

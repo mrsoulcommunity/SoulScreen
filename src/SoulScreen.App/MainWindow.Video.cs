@@ -622,19 +622,28 @@ public partial class MainWindow
     /// and dropped rather than left armed for whatever connects next, which nobody asked for.</summary>
     private void CheckRecordingSchedule()
     {
-        if (_recordingSchedule is not { } schedule || !schedule.IsDue(DateTime.UtcNow)) return;
-        _recordingSchedule = null;
+        // The branching lives in ScheduledRecordingTick, where tests can reach it; this
+        // method only applies the decision's side effects to the real controls.
+        var action = ScheduledRecordingTick.Decide(
+            _recordingSchedule, DateTime.UtcNow,
+            alreadyRecording: RecordButton.IsChecked == true,
+            canRecord: RecordButton.IsEnabled, out var autoStop);
 
-        if (RecordButton.IsChecked == true) return; // already recording, by hand or by another path
-        if (!RecordButton.IsEnabled)
+        if (action == ScheduledStartAction.Wait) return;
+        _recordingSchedule = null; // a due schedule is consumed on every outcome
+
+        switch (action)
         {
-            ShowToast("The scheduled recording could not start - nothing is connected", "\uE7BA");
-            UpdateRecordingPill();
-            return;
+            case ScheduledStartAction.DropAlreadyRecording:
+                return; // by hand or by another path; nothing to announce
+            case ScheduledStartAction.DropNothingConnected:
+                ShowToast("The scheduled recording could not start - nothing is connected", "\uE7BA");
+                UpdateRecordingPill();
+                return;
         }
 
         RecordButton.IsChecked = true; // OnRecordChanged does the rest
-        if (schedule.Duration is { } duration)
+        if (autoStop is { } duration)
         {
             _recordingTimer ??= new RecordingTimer();
             _recordingTimer.Arm(duration, DateTime.UtcNow);
@@ -821,14 +830,14 @@ public partial class MainWindow
 
         var raw = Video.Snapshot();
         if (raw is null) return null;
-        if (_settings.Rotation == 0 && !_settings.MirrorHorizontally) return ComposeMarkup(raw);
+        if (_settings.Rotation == 0 && !_settings.MirrorHorizontally) return ComposeWatermark(ComposeMarkup(raw));
 
         var group = new TransformGroup();
         if (_settings.MirrorHorizontally) group.Children.Add(new ScaleTransform(-1, 1));
         if (_settings.Rotation != 0) group.Children.Add(new RotateTransform(_settings.Rotation));
         var transformed = new TransformedBitmap(raw, group);
         transformed.Freeze();
-        return ComposeMarkup(transformed);
+        return ComposeWatermark(ComposeMarkup(transformed));
     }
 
     /// <returns>True if a screenshot was written.</returns>

@@ -330,6 +330,8 @@ public partial class MainWindow
         if (_settings.AllowedDevices.Count + _settings.BlockedDevices.Count > 0)
             yield return new("Allowed and blocked iPhones", "Privacy", "\uEA18", null, () => ShowSettingsSection("PRIVACY"),
                 "privacy unblock remove trust list devices");
+        yield return new("Recurring recording", "Capture", "\uE823", null, () => ShowSettingsSection("RECURRING RECORDING"),
+            "schedule automatic weekday weekend timer security recurring cron");
         yield return new(_settings.GlobalHotkeys ? "Stop the shortcuts in other apps" : "Use shortcuts from any app", "Window", "\uE765", null,
             () => SetGlobalHotkeys(!_settings.GlobalHotkeys), "global hotkeys keyboard system wide background");
 

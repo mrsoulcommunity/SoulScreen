@@ -81,7 +81,7 @@ public partial class MainWindow
 
     private void OnGlobalHotkey(HotkeyAction action)
     {
-        if (_shuttingDown) return;
+        if (_shuttingDown || IsLocked) return;
 
         switch (action)
         {
@@ -170,7 +170,7 @@ public partial class MainWindow
         if (TaskbarItemInfo is not { } info || _thumbSnapshot is null || _thumbRecord is null || _thumbMute is null || _thumbMini is null)
             return;
 
-        var streaming = !_shuttingDown && VideoHost.Visibility == Visibility.Visible;
+        var streaming = !_shuttingDown && !IsLocked && VideoHost.Visibility == Visibility.Visible;
         var recording = RecordButton.IsChecked == true;
         var muted = MuteButton.IsChecked == true;
 

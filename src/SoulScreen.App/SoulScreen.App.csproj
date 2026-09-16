@@ -7,9 +7,14 @@
     <ProjectReference Include="..\SoulScreen.Media\SoulScreen.Media.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- DPAPI, for encrypting the PIN lock's hash to the current Windows user on disk. -->
+    <PackageReference Include="System.Security.Cryptography.ProtectedData" Version="8.0.0" />
+  </ItemGroup>
+
   <PropertyGroup>
     <OutputType>WinExe</OutputType>
-    <TargetFramework>net8.0-windows</TargetFramework>
+    <TargetFramework>net8.0-windows10.0.19041.0</TargetFramework>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <UseWPF>true</UseWPF>

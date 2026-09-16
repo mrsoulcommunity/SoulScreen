@@ -78,7 +78,11 @@ public partial class MainWindow
         UpdateRecordingPill();
         CheckRecordingDiskSpace();
         CheckRecordingTimer();
+        CheckRecordingSchedule();
+        CheckRecurringRecordings();
+        CheckIdleLock();
         SampleMetricsHistory();
+        ////RefreshMultiDeviceGrid();
 
         var source = ActiveSource;
         if (source is null)

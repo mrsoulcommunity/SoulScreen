@@ -125,12 +125,16 @@ public partial class MainWindow
             AnimationsOn.IsChecked = _settings.Animations == MotionPreference.AlwaysOn;
             AnimationsOff.IsChecked = _settings.Animations == MotionPreference.AlwaysOff;
             PopulateDisplayChoices();
+            RefreshRecurringRecordingsList();
+            PopulateLockSettingsForm();
+            PopulateWatermarkSettingsForm();
 
             PopulateAudioDevices();
 
             CaptureFolderBox.Text = _settings.CaptureDirectory;
             RecordAudioCheck.IsChecked = _settings.RecordAudio;
             ClipboardCheck.IsChecked = _settings.CopyScreenshotToClipboard;
+            OcrSearchCheck.IsChecked = _settings.EnableOcrSearch;
             FormatPng.IsChecked = _settings.ScreenshotFormat == ScreenshotFormat.Png;
             FormatJpeg.IsChecked = _settings.ScreenshotFormat == ScreenshotFormat.Jpeg;
 
@@ -945,6 +949,11 @@ public partial class MainWindow
         // The window is not the only holder: whatever reads App.Settings must see the reset too.
         App.Settings = fresh;
         _settings.Save();
+
+        // Recurring rules are gone (Defaults() starts empty); the per-rule state below is
+        // keyed by rule id, so it would otherwise point at ids that no longer exist.
+        _recurringNextFireLocal.Clear();
+        _recurringEditorsOpen.Clear();
 
         ThemeManager.Apply(_settings.Theme, _settings.Accent, animate: true);
         ApplySettingsToChrome();

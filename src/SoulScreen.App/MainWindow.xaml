@@ -34,6 +34,78 @@
                         Click="OnRemoveDeviceRule" AutomationProperties.Name="{Binding Name, StringFormat='Remove {0}'}" />
             </Grid>
         </DataTemplate>
+
+        <!-- One "record every Mon/Wed/Fri at 09:00" rule: a compact summary row that expands
+             into an inline editor - a day picker, a start time and a duration - rather than a
+             separate modal, so adding several schedules stays a single scroll through the card. -->
+        <DataTemplate x:Key="RecurringRuleTemplate">
+            <Border Padding="0,8,0,0">
+                <StackPanel>
+                    <Grid>
+                        <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <CheckBox Style="{StaticResource Switch}" VerticalAlignment="Center"
+                                  IsChecked="{Binding Enabled, Mode=TwoWay}"
+                                  AutomationProperties.Name="{Binding SwitchAutomationName}" />
+                        <StackPanel Grid.Column="1" VerticalAlignment="Center" Margin="10,0,0,0">
+                            <TextBlock Text="{Binding DaysSummary}" Style="{StaticResource Body}" TextTrimming="CharacterEllipsis" />
+                            <TextBlock Text="{Binding TimeSummary}" Style="{StaticResource Caption}" TextTrimming="CharacterEllipsis" />
+                        </StackPanel>
+                        <Button Grid.Column="2" Content="{Binding EditButtonLabel}" Style="{StaticResource SmallButton}" Margin="8,0,0,0"
+                                VerticalAlignment="Center" Click="OnToggleRecurringRuleEditor" />
+                        <Button Grid.Column="3" Content="Remove" Style="{StaticResource SmallButton}" Margin="8,0,0,0" VerticalAlignment="Center"
+                                Click="OnRemoveRecurringRecording" AutomationProperties.Name="{Binding RemoveAutomationName}" />
+                    </Grid>
+
+                    <!-- The editor: hidden until "Edit" is pressed, so a card with several
+                         schedules is not a wall of controls before anything has been touched. -->
+                    <Border Visibility="{Binding EditorVisibility}" Background="{DynamicResource SurfaceSunken}"
+                            CornerRadius="8" Padding="12,10" Margin="0,8,0,0">
+                        <StackPanel>
+                            <TextBlock Text="Days" Style="{StaticResource Caption}" Margin="0,0,0,6" />
+                            <WrapPanel>
+                                <ToggleButton Content="Sun" Style="{StaticResource Segment}" MinWidth="0" Padding="9,4" Margin="0,0,4,4"
+                                              IsChecked="{Binding IncludesSunday, Mode=TwoWay}" />
+                                <ToggleButton Content="Mon" Style="{StaticResource Segment}" MinWidth="0" Padding="9,4" Margin="0,0,4,4"
+                                              IsChecked="{Binding IncludesMonday, Mode=TwoWay}" />
+                                <ToggleButton Content="Tue" Style="{StaticResource Segment}" MinWidth="0" Padding="9,4" Margin="0,0,4,4"
+                                              IsChecked="{Binding IncludesTuesday, Mode=TwoWay}" />
+                                <ToggleButton Content="Wed" Style="{StaticResource Segment}" MinWidth="0" Padding="9,4" Margin="0,0,4,4"
+                                              IsChecked="{Binding IncludesWednesday, Mode=TwoWay}" />
+                                <ToggleButton Content="Thu" Style="{StaticResource Segment}" MinWidth="0" Padding="9,4" Margin="0,0,4,4"
+                                              IsChecked="{Binding IncludesThursday, Mode=TwoWay}" />
+                                <ToggleButton Content="Fri" Style="{StaticResource Segment}" MinWidth="0" Padding="9,4" Margin="0,0,4,4"
+                                              IsChecked="{Binding IncludesFriday, Mode=TwoWay}" />
+                                <ToggleButton Content="Sat" Style="{StaticResource Segment}" MinWidth="0" Padding="9,4" Margin="0,0,4,4"
+                                              IsChecked="{Binding IncludesSaturday, Mode=TwoWay}" />
+                            </WrapPanel>
+                            <Grid Margin="0,10,0,0">
+                                <Grid.ColumnDefinitions>
+                                    <ColumnDefinition Width="*" />
+                                    <ColumnDefinition Width="*" />
+                                </Grid.ColumnDefinitions>
+                                <StackPanel>
+                                    <TextBlock Text="Start time (24h, e.g. 09:00)" Style="{StaticResource Caption}" Margin="0,0,0,4" />
+                                    <TextBox Text="{Binding TimeText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                             AutomationProperties.Name="Start time" MaxWidth="140" HorizontalAlignment="Left" />
+                                </StackPanel>
+                                <StackPanel Grid.Column="1" Margin="12,0,0,0">
+                                    <TextBlock Text="Duration in minutes (0 = until stopped)" Style="{StaticResource Caption}" Margin="0,0,0,4" />
+                                    <TextBox Text="{Binding DurationText, Mode=TwoWay, UpdateSourceTrigger=LostFocus}"
+                                             AutomationProperties.Name="Duration in minutes" MaxWidth="140" HorizontalAlignment="Left" />
+                                </StackPanel>
+                            </Grid>
+                            <TextBlock Text="{Binding ValidationMessage}" Style="{StaticResource Caption}" Foreground="{DynamicResource Danger}"
+                                       Margin="0,8,0,0" TextWrapping="Wrap" Visibility="{Binding ValidationVisibility}" />
+                        </StackPanel>
+                    </Border>
+                </StackPanel>
+            </Border>
+        </DataTemplate>
     </Window.Resources>
 
     <!-- Typography defaults ride down as inherited values, so anything with its own style
@@ -298,6 +370,11 @@
                     </ContextMenu>
                 </Border.ContextMenu>
             </Border>
+
+            <!-- The multi-device grid: one tile per concurrently mirroring iPhone, shown in place
+                 of the single picture whenever two or more stream at once. -->
+            <Grid x:Name="TileGrid" Visibility="Collapsed" Background="{StaticResource VideoBackground}"
+                  AutomationProperties.Name="Mirroring devices" />
 
             <!-- A brief white flash over the picture when a screenshot is taken, like a camera. -->
             <Border x:Name="FlashOverlay" Background="{StaticResource Flash}" Opacity="0" IsHitTestVisible="False" />
@@ -1007,6 +1084,71 @@
                                     </StackPanel>
                                 </Border>
 
+                                <!-- ============================== security ============================== -->
+                                <TextBlock Text="SECURITY" Style="{StaticResource SectionTitle}" />
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <controls:SettingRow Title="Lock with a PIN" IsFirst="True" Stacked="True"
+                                                             Detail="Guards the window from anyone else with access to this unlocked PC - separate from Windows' own lock screen. Forgetting the PIN means turning the lock off and on again from an unlocked session; there is no recovery.">
+                                            <StackPanel>
+                                                <CheckBox x:Name="LockEnabledCheck" Content="Require a PIN to open SoulScreen" Style="{StaticResource Switch}"
+                                                          Click="OnLockEnabledChanged" />
+                                                <StackPanel x:Name="LockConfiguredPanel" Margin="0,10,0,0">
+                                                    <Button x:Name="LockChangePinButton" Content="Change PIN" Style="{StaticResource SmallButton}"
+                                                            HorizontalAlignment="Left" Click="OnChangeLockPin" />
+                                                </StackPanel>
+                                                <!-- The PIN setup panel: shown when the switch above is first turned on,
+                                                     or when "Change PIN" is pressed. A new PIN is typed twice, the same as
+                                                     a password field anywhere else, since there is no recovery if it is
+                                                     mistyped once and saved wrong. -->
+                                                <Border x:Name="LockSetupPanel" Visibility="Collapsed" Background="{DynamicResource SurfaceSunken}"
+                                                        CornerRadius="8" Padding="12,10" Margin="0,10,0,0">
+                                                    <StackPanel>
+                                                        <TextBlock Text="New PIN (4 to 8 digits)" Style="{StaticResource Caption}" Margin="0,0,0,4" />
+                                                        <PasswordBox x:Name="LockSetupPinBox" MaxLength="8" MaxWidth="160" HorizontalAlignment="Left"
+                                                                     AutomationProperties.Name="New PIN" />
+                                                        <TextBlock Text="Confirm PIN" Style="{StaticResource Caption}" Margin="0,10,0,4" />
+                                                        <PasswordBox x:Name="LockSetupConfirmBox" MaxLength="8" MaxWidth="160" HorizontalAlignment="Left"
+                                                                     AutomationProperties.Name="Confirm PIN" KeyDown="OnLockSetupConfirmKeyDown" />
+                                                        <TextBlock x:Name="LockSetupError" Style="{StaticResource Caption}" Foreground="{DynamicResource Danger}"
+                                                                   Margin="0,8,0,0" TextWrapping="Wrap" Visibility="Collapsed" />
+                                                        <WrapPanel Margin="0,12,0,0">
+                                                            <Button Content="Save PIN" Style="{StaticResource SmallButton}" Margin="0,0,8,0"
+                                                                    Click="OnSaveLockPin" />
+                                                            <Button Content="Cancel" Style="{StaticResource SmallButton}" Click="OnCancelLockSetup" />
+                                                        </WrapPanel>
+                                                    </StackPanel>
+                                                </Border>
+                                            </StackPanel>
+                                        </controls:SettingRow>
+                                        <controls:SettingRow x:Name="LockOnLaunchRow" Title="Lock as soon as SoulScreen starts"
+                                                             Detail="Nothing is shown, even a mirrored phone, until the PIN is entered.">
+                                            <CheckBox x:Name="LockOnLaunchCheck" Style="{StaticResource Switch}" Click="OnLockOptionChanged" />
+                                        </controls:SettingRow>
+                                        <controls:SettingRow x:Name="LockOnMinimizeRow" Title="Lock when minimised to the notification area">
+                                            <CheckBox x:Name="LockOnMinimizeCheck" Style="{StaticResource Switch}" Click="OnLockOptionChanged" />
+                                        </controls:SettingRow>
+                                        <controls:SettingRow x:Name="LockIdleRow" Title="Lock after being idle" Stacked="True"
+                                                             Detail="No keyboard or mouse activity for this long, and nothing mirroring. Off leaves it to the two switches above alone.">
+                                            <Border Style="{StaticResource SegmentTrack}" HorizontalAlignment="Left">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <RadioButton x:Name="LockIdleOff" Style="{StaticResource Segment}" Content="Off" GroupName="LockIdle"
+                                                                 Checked="OnLockIdleChanged" />
+                                                    <RadioButton x:Name="LockIdle5" Style="{StaticResource Segment}" Content="5 min" GroupName="LockIdle"
+                                                                 Checked="OnLockIdleChanged" />
+                                                    <RadioButton x:Name="LockIdle15" Style="{StaticResource Segment}" Content="15 min" GroupName="LockIdle"
+                                                                 Checked="OnLockIdleChanged" />
+                                                    <RadioButton x:Name="LockIdle30" Style="{StaticResource Segment}" Content="30 min" GroupName="LockIdle"
+                                                                 Checked="OnLockIdleChanged" />
+                                                </StackPanel>
+                                            </Border>
+                                        </controls:SettingRow>
+                                        <controls:SettingRow Title="Lock now" Detail="Locks immediately, as if you had just stepped away.">
+                                            <Button x:Name="LockNowButton" Content="Lock" Style="{StaticResource SmallButton}" Click="OnLockNowClicked" />
+                                        </controls:SettingRow>
+                                    </StackPanel>
+                                </Border>
+
                                 <!-- ============================== capture ============================== -->
                                 <TextBlock Text="SCREENSHOTS AND RECORDINGS" Style="{StaticResource SectionTitle}" />
                                 <Border Style="{StaticResource Card}">
@@ -1037,6 +1179,10 @@
                                         <controls:SettingRow Title="Also copy screenshots to the clipboard">
                                             <CheckBox x:Name="ClipboardCheck" Style="{StaticResource Switch}" Click="OnInstantSettingChanged" />
                                         </controls:SettingRow>
+                                        <controls:SettingRow Title="Search screenshots by their on-screen text"
+                                                             Detail="Reads each screenshot with Windows' own OCR, entirely on this PC, so the search box in the gallery also finds text that was on screen - an error code, a Wi-Fi password - not just the file name.">
+                                            <CheckBox x:Name="OcrSearchCheck" Style="{StaticResource Switch}" Click="OnOcrSearchChanged" />
+                                        </controls:SettingRow>
                                         <controls:SettingRow Title="Keep captures under" Stacked="True"
                                                              Detail="Oldest captures are moved to the Recycle Bin when the folder grows past this. Off by default.">
                                             <Grid>
@@ -1060,6 +1206,73 @@
                                                            VerticalAlignment="Center" TextTrimming="CharacterEllipsis"
                                                            ToolTip="Set in settings.json as CaptureBudgetBytes - a whole number of bytes, at least 256 MB." />
                                             </Grid>
+                                        </controls:SettingRow>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- ============================== watermark ============================== -->
+                                <TextBlock Text="WATERMARK" Style="{StaticResource SectionTitle}" />
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <controls:SettingRow x:Name="WatermarkEnabledRow" Title="Stamp screenshots with a logo" IsFirst="True"
+                                                             Detail="Lays an image over every screenshot - not recordings, which are written straight from the phone's own video with nothing decoded or redrawn.">
+                                            <CheckBox x:Name="WatermarkEnabledCheck" Style="{StaticResource Switch}" Click="OnWatermarkEnabledChanged" />
+                                        </controls:SettingRow>
+                                        <controls:SettingRow x:Name="WatermarkImageRow" Title="Image" Stacked="True"
+                                                             Detail="A PNG with transparency reads best. Re-picking the same file after editing it picks up the change on the next screenshot.">
+                                            <Grid>
+                                                <Grid.ColumnDefinitions>
+                                                    <ColumnDefinition Width="*" />
+                                                    <ColumnDefinition Width="Auto" />
+                                                </Grid.ColumnDefinitions>
+                                                <TextBox x:Name="WatermarkImageBox" IsReadOnly="True" Foreground="{DynamicResource TextSecondary}" />
+                                                <Button Grid.Column="1" Style="{StaticResource SmallButton}" Content="Choose…" Margin="8,0,0,0" Click="OnChooseWatermarkImage" />
+                                            </Grid>
+                                        </controls:SettingRow>
+                                        <controls:SettingRow x:Name="WatermarkCornerRow" Title="Position">
+                                            <Border Style="{StaticResource SegmentTrack}">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <RadioButton x:Name="WatermarkTopLeft" Style="{StaticResource Segment}" Content="Top-left" GroupName="WatermarkCorner" Checked="OnWatermarkCornerChanged" />
+                                                    <RadioButton x:Name="WatermarkTopRight" Style="{StaticResource Segment}" Content="Top-right" GroupName="WatermarkCorner" Checked="OnWatermarkCornerChanged" />
+                                                    <RadioButton x:Name="WatermarkBottomLeft" Style="{StaticResource Segment}" Content="Bottom-left" GroupName="WatermarkCorner" Checked="OnWatermarkCornerChanged" />
+                                                    <RadioButton x:Name="WatermarkBottomRight" Style="{StaticResource Segment}" Content="Bottom-right" GroupName="WatermarkCorner" Checked="OnWatermarkCornerChanged" />
+                                                    <RadioButton x:Name="WatermarkCenter" Style="{StaticResource Segment}" Content="Centre" GroupName="WatermarkCorner" Checked="OnWatermarkCornerChanged" />
+                                                </StackPanel>
+                                            </Border>
+                                        </controls:SettingRow>
+                                        <controls:SettingRow x:Name="WatermarkSizeRow" Title="Size">
+                                            <Border Style="{StaticResource SegmentTrack}">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <RadioButton x:Name="WatermarkSizeSmall" Style="{StaticResource Segment}" Content="Small" GroupName="WatermarkSize" Checked="OnWatermarkSizeChanged" />
+                                                    <RadioButton x:Name="WatermarkSizeMedium" Style="{StaticResource Segment}" Content="Medium" GroupName="WatermarkSize" Checked="OnWatermarkSizeChanged" />
+                                                    <RadioButton x:Name="WatermarkSizeLarge" Style="{StaticResource Segment}" Content="Large" GroupName="WatermarkSize" Checked="OnWatermarkSizeChanged" />
+                                                </StackPanel>
+                                            </Border>
+                                        </controls:SettingRow>
+                                        <controls:SettingRow x:Name="WatermarkOpacityRow" Title="Opacity">
+                                            <Border Style="{StaticResource SegmentTrack}">
+                                                <StackPanel Orientation="Horizontal">
+                                                    <RadioButton x:Name="WatermarkOpacitySubtle" Style="{StaticResource Segment}" Content="Subtle" GroupName="WatermarkOpacity" Checked="OnWatermarkOpacityChanged" />
+                                                    <RadioButton x:Name="WatermarkOpacityMedium" Style="{StaticResource Segment}" Content="Medium" GroupName="WatermarkOpacity" Checked="OnWatermarkOpacityChanged" />
+                                                    <RadioButton x:Name="WatermarkOpacitySolid" Style="{StaticResource Segment}" Content="Solid" GroupName="WatermarkOpacity" Checked="OnWatermarkOpacityChanged" />
+                                                </StackPanel>
+                                            </Border>
+                                        </controls:SettingRow>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- ============================== recurring recording ============================== -->
+                                <TextBlock Text="RECURRING RECORDING" Style="{StaticResource SectionTitle}" />
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <controls:SettingRow Title="Automatic recording" IsFirst="True" Stacked="True"
+                                                             Detail="Records on its own on the days and times you choose - a fixed daily capture, or a security-style recurring session. Only runs while an iPhone is mirrored; a schedule that fires with nothing connected is skipped and tried again next time.">
+                                            <StackPanel>
+                                                <TextBlock x:Name="NoRecurringText" Text="No schedules yet." Style="{StaticResource Caption}" Margin="0,2,0,8" />
+                                                <ItemsControl x:Name="RecurringRecordingsList" ItemTemplate="{StaticResource RecurringRuleTemplate}" Focusable="False" />
+                                                <Button Content="Add a schedule" Style="{StaticResource SmallButton}" Margin="0,10,0,0"
+                                                        HorizontalAlignment="Left" Click="OnAddRecurringRecording" />
+                                            </StackPanel>
                                         </controls:SettingRow>
                                     </StackPanel>
                                 </Border>
@@ -1783,6 +1996,32 @@
                            Text="Starting..." TextTrimming="CharacterEllipsis" />
             </DockPanel>
         </Border>
+
+        <!-- ============================ pin lock ============================
+             Above everything, palette included - what an unlocked PC session must never
+             show. A phone that is mid-session keeps mirroring and recording behind this;
+             locking is about who can see and control the app, not about ending a session. -->
+        <Grid x:Name="LockOverlay" Grid.RowSpan="3" Visibility="Collapsed" Panel.ZIndex="200"
+              shell:WindowChrome.IsHitTestVisibleInChrome="True">
+            <Border Background="{DynamicResource Surface}" />
+            <StackPanel HorizontalAlignment="Center" VerticalAlignment="Center" MaxWidth="300">
+                <Border Width="68" Height="68" CornerRadius="17" Background="{DynamicResource Accent}" HorizontalAlignment="Center">
+                    <TextBlock Text="&#xEA18;" FontFamily="{StaticResource IconFont}" FontSize="30" Foreground="{DynamicResource OnAccent}"
+                               HorizontalAlignment="Center" VerticalAlignment="Center" />
+                </Border>
+                <TextBlock Text="SoulScreen is locked" Style="{StaticResource Heading}" FontSize="20"
+                           HorizontalAlignment="Center" TextAlignment="Center" Margin="0,16,0,0" />
+                <TextBlock x:Name="LockSubtitle" Text="Enter your PIN to continue" Style="{StaticResource Subheading}"
+                           HorizontalAlignment="Center" TextAlignment="Center" Margin="0,4,0,0" TextWrapping="Wrap" />
+                <PasswordBox x:Name="LockPinBox" Margin="0,20,0,0" MaxLength="8" FontSize="20"
+                             HorizontalContentAlignment="Center" PasswordChar="●"
+                             KeyDown="OnLockPinKeyDown" AutomationProperties.Name="PIN" />
+                <TextBlock x:Name="LockErrorText" Style="{StaticResource Caption}" Foreground="{DynamicResource Danger}"
+                           HorizontalAlignment="Center" TextAlignment="Center" Margin="0,10,0,0" TextWrapping="Wrap"
+                           Visibility="Collapsed" />
+                <Button Content="Unlock" Style="{StaticResource PrimaryButton}" Margin="0,16,0,0" Click="OnLockUnlockClicked" />
+            </StackPanel>
+        </Grid>
 
         <!-- ============================ welcome ============================
              Shown once, on the first launch. Over everything but the palette, and out of the

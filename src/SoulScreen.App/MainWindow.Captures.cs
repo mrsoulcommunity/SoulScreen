@@ -36,6 +36,13 @@ public partial class MainWindow
 
     private List<CaptureItem> _allCaptures = [];
 
+    /// <summary>Most files OCR'd in one pass of the gallery. Already-indexed files are
+    /// instant (a cache lookup), so this only bounds how much work a *new* pile of
+    /// screenshots costs before the rest catch up on a later refresh.</summary>
+    private const int MaxOcrPerPass = 200;
+
+    private OcrCache? _ocrCache;
+
     private sealed class CaptureItem : INotifyPropertyChanged
     {
         private Brush? _thumbnail;
@@ -44,6 +51,13 @@ public partial class MainWindow
         public required CaptureKind Kind { get; init; }
         public required DateTime ModifiedLocal { get; init; }
         public required long Size { get; init; }
+
+        /// <summary>Text OCR found in the screenshot, or null before it has been indexed
+        /// (or for anything that is not a screenshot). Empty string, not null, once indexed
+        /// with nothing recognised - the distinction is "not looked at yet" vs "looked at,
+        /// nothing there", which matters so an item is never re-OCR'd forever for having
+        /// no text.</summary>
+        public string? OcrText { get; set; }
 
         public string FileName => System.IO.Path.GetFileName(Path);
 
@@ -131,6 +145,29 @@ public partial class MainWindow
 
     private void OnRefreshCaptures(object sender, RoutedEventArgs e) => RefreshCaptures();
 
+    private void OnOcrSearchChanged(object sender, RoutedEventArgs e)
+    {
+        _settings.EnableOcrSearch = OcrSearchCheck.IsChecked == true;
+        _settings.Save();
+
+        if (!_settings.EnableOcrSearch)
+        {
+            // Turned off: cached text stops being searchable immediately, without waiting
+            // for a refresh, and the in-memory engine handle is let go.
+            foreach (var item in _allCaptures) item.OcrText = null;
+            ApplyCaptureFilter();
+            return;
+        }
+
+        if (!ScreenshotOcr.IsAvailable)
+        {
+            ShowToast("No OCR language is installed for Windows to read text with", "");
+            return;
+        }
+
+        RefreshCapturesIfOpen();
+    }
+
     private void OnCaptureFilterChanged(object sender, RoutedEventArgs e)
     {
         if (CaptureList is null) return;
@@ -189,6 +226,7 @@ public partial class MainWindow
         _allCaptures = items;
         ApplyCaptureFilter();
         await LoadThumbnailsAsync(items, generation);
+        await IndexOcrTextAsync(items, generation);
     }
 
     private static List<CaptureItem> ListCaptures(string directory)
@@ -228,7 +266,8 @@ public partial class MainWindow
             : complete;
 
         var query = CapturesSearchBox.Text;
-        var matching = string.IsNullOrWhiteSpace(query) ? shown.ToList() : shown.Where(item => CaptureFilter.Matches(item.FileName, query)).ToList();
+        var matching = string.IsNullOrWhiteSpace(query) ? shown.ToList()
+            : shown.Where(item => CaptureFilter.Matches(item.FileName, query) || OcrIndex.Matches(item.OcrText, query)).ToList();
         CaptureFilter.Sort(matching, item => item.ModifiedLocal, item => item.Size, CaptureSort);
         var list = matching.Take(MaxCapturesShown).ToList();
 
@@ -272,6 +311,74 @@ public partial class MainWindow
             var thumbnail = await Task.Run(() => DecodeThumbnail(item.Path));
             if (generation != _captureGeneration) return;
             if (thumbnail is not null) item.Thumbnail = thumbnail;
+        }
+    }
+
+    /// <summary>
+    /// OCRs any screenshot in <paramref name="items"/> whose cached text is missing or
+    /// stale, so the search box's next keystroke can find it - not just this refresh's, if
+    /// the pass takes long enough that the generation moves on first.
+    /// <para>
+    /// Off unless the setting is on, and silently gives up the whole pass (not just one
+    /// file) the first time Windows reports no OCR language installed, so a search box
+    /// that will never find anything does not retry every screenshot on every refresh.
+    /// </para>
+    /// </summary>
+    private async Task IndexOcrTextAsync(IReadOnlyList<CaptureItem> items, int generation)
+    {
+        if (!_settings.EnableOcrSearch) return;
+
+        var cache = _ocrCache ??= OcrCache.Load();
+        var screenshots = items.Where(item => item.Kind == CaptureKind.Screenshot).ToList();
+
+        // Anything already cached for its current on-disk state is filled in immediately,
+        // with no OCR pass at all - this covers every refresh after the first.
+        var pending = new List<CaptureItem>();
+        foreach (var item in screenshots)
+        {
+            if (cache.Entries.TryGetValue(item.Path, out var entry) && OcrIndex.IsFresh(entry, item.ModifiedLocal))
+                item.OcrText = entry.Text;
+            else
+                pending.Add(item);
+        }
+        if (generation != _captureGeneration) return;
+        if (pending.Count > 0) ApplyCaptureFilter();
+        if (pending.Count == 0) return;
+
+        var indexed = 0;
+        foreach (var item in pending.Take(MaxOcrPerPass))
+        {
+            if (generation != _captureGeneration || _shuttingDown) return;
+
+            string text;
+            try
+            {
+                text = await Task.Run(() => ScreenshotOcr.RecognizeAsync(item.Path));
+            }
+            catch (InvalidOperationException)
+            {
+                // No OCR language installed: nothing later in this pass will succeed either.
+                return;
+            }
+            catch (Exception ex)
+            {
+                // Moved, deleted, or not really an image: skip it, do not retry it forever -
+                // caching "" is what stops it being retried every single refresh.
+                _log.Warn($"could not read text from {item.Path}", ex);
+                text = "";
+            }
+
+            if (generation != _captureGeneration) return;
+
+            item.OcrText = text;
+            cache.Set(item.Path, item.ModifiedLocal, text);
+            indexed++;
+        }
+
+        if (indexed > 0)
+        {
+            cache.PruneAndSave(screenshots.Select(item => item.Path).ToHashSet(StringComparer.OrdinalIgnoreCase));
+            if (generation == _captureGeneration) ApplyCaptureFilter();
         }
     }
 

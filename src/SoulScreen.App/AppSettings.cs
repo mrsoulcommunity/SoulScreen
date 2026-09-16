@@ -140,6 +140,87 @@ public sealed class TimestampSettings
 }
 
 /// <summary>
+/// A custom logo or text laid over every screenshot, for demos and branded hand-offs. Off
+/// by default - nothing about an existing capture changes until a mark is chosen and turned
+/// on.
+/// <para>
+/// Screenshots only: recordings are written by remuxing the phone's H.264 directly with no
+/// decode step (see <c>SessionRecorder</c>), which is what keeps recording both lossless and
+/// nearly free of CPU cost. Baking a mark into every frame would mean fully transcoding
+/// every recording, trading that away for a feature a still image already delivers.
+/// </para>
+/// <para>
+/// The image is read from disk each time a screenshot is composed rather than cached in
+/// settings, so replacing the file (a new logo, a fixed typo) takes effect on the very next
+/// screenshot with no restart.
+/// </para>
+/// </summary>
+public sealed class WatermarkSettings
+{
+    /// <summary>Off by default.</summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>Path to a PNG or JPEG to draw over every capture. Null/missing/unreadable
+    /// is treated the same as disabled for that capture - a screenshot must never fail to
+    /// save just because the watermark file was moved.</summary>
+    public string? ImagePath { get; set; }
+
+    public WatermarkCorner Corner { get; set; } = WatermarkCorner.BottomRight;
+
+    /// <summary>Fraction of the canvas' shortest side the mark's longest side spans.</summary>
+    public double Scale { get; set; } = WatermarkPlacement.DefaultScale;
+
+    /// <summary>0 (invisible) to 1 (opaque).</summary>
+    public double Opacity { get; set; } = WatermarkPlacement.DefaultOpacity;
+
+    /// <summary>Gap from the edges, as a fraction of the canvas' shortest side. Ignored for
+    /// <see cref="WatermarkCorner.Center"/>.</summary>
+    public double MarginFraction { get; set; } = WatermarkPlacement.DefaultMarginFraction;
+}
+
+/// <summary>
+/// The PIN lock: guards SoulScreen from being opened by someone else with physical access to
+/// an unlocked PC, independent of Windows' own lock screen.
+/// <para>
+/// Only a salted PBKDF2 hash of the PIN is kept - see <see cref="Logic.AppLock"/> - and that
+/// hash is DPAPI-protected to the current Windows user on top, so copying settings.json to
+/// another machine or another account carries nothing worth cracking.
+/// </para>
+/// </summary>
+public sealed class LockSettings
+{
+    /// <summary>Off by default: a PIN nobody asked for is a lockout waiting to happen.</summary>
+    public bool Enabled { get; set; }
+
+    /// <summary>DPAPI-protected (current user), then base64: the salt PBKDF2 used.</summary>
+    public string? ProtectedSaltBase64 { get; set; }
+
+    /// <summary>DPAPI-protected (current user), then base64: the PBKDF2 hash itself.</summary>
+    public string? ProtectedHashBase64 { get; set; }
+
+    public int Iterations { get; set; } = Logic.AppLock.DefaultIterations;
+
+    /// <summary>Lock again after this many minutes of no input while the window has focus and
+    /// nothing is mirroring. Zero means "only when minimised to the tray or on request".</summary>
+    public int AutoLockAfterMinutesIdle { get; set; }
+
+    /// <summary>Lock whenever the window goes to the notification area.</summary>
+    public bool LockOnMinimizeToTray { get; set; } = true;
+
+    /// <summary>Lock as soon as SoulScreen starts, before anything - including a mirrored
+    /// phone from a previous session's demo - can be seen.</summary>
+    public bool LockOnLaunch { get; set; }
+
+    // ---- backoff state, persisted so restarting the app cannot be used to reset it ----
+
+    /// <summary>Wrong PINs entered in a row since the last correct one.</summary>
+    public int ConsecutiveFailures { get; set; }
+
+    /// <summary>When the most recent wrong PIN was entered, for <see cref="Logic.LockoutPolicy"/>.</summary>
+    public DateTime? LastFailureUtc { get; set; }
+}
+
+/// <summary>
 /// User preferences, persisted next to the pairing identity in %LOCALAPPDATA%\SoulScreen.
 /// </summary>
 public sealed class AppSettings
@@ -184,6 +265,18 @@ public sealed class AppSettings
 
     /// <summary>Accept the phone's audio as well as its screen.</summary>
     public bool EnableAudio { get; set; } = true;
+
+    /// <summary>
+    /// Mirror more than one iPhone at once into a grid of tiles. Off keeps today's
+    /// single-session behaviour exactly as it is - one phone takes the whole window, and a
+    /// second connecting takes the receiver over, as it always has.
+    /// </summary>
+    public bool EnableMultiDevice { get; set; }
+
+    /// <summary>Highest number of phones mirrored at once in multi-device mode, 2 to 4.
+    /// A session beyond the cap still mirrors - the phone knows no different - but it is
+    /// not offered a tile until one frees up.</summary>
+    public int MaxMirroredTiles { get; set; } = 4;
 
     /// <summary>Start advertising as soon as the app opens.</summary>
     public bool StartReceiverOnLaunch { get; set; } = true;
@@ -402,6 +495,31 @@ public sealed class AppSettings
     /// </summary>
     public TimestampSettings Timestamps { get; set; } = new();
 
+    // -------------------------------------------------------- recurring recording
+
+    /// <summary>"Record every weekday at 09:00" rules, checked once a minute while the app
+    /// runs. Empty by default - nothing records on its own until one is added.</summary>
+    public List<RecurringRecordingRule> RecurringRecordings { get; set; } = [];
+
+    // ------------------------------------------------------------------------ lock
+
+    /// <summary>The PIN lock. Off by default.</summary>
+    public LockSettings Lock { get; set; } = new();
+
+    // ------------------------------------------------------------------- watermark
+
+    /// <summary>The custom logo/branding overlay. Off by default.</summary>
+    public WatermarkSettings Watermark { get; set; } = new();
+
+    // ------------------------------------------------------------------------ ocr
+
+    /// <summary>
+    /// Search screenshots by the text on screen, not just the file name. Off by default:
+    /// running Windows' OCR over a folder of screenshots costs real time on first use, and
+    /// nobody who never needs it should pay that just because the app was updated.
+    /// </summary>
+    public bool EnableOcrSearch { get; set; }
+
     // ------------------------------------------------------------------- updates
 
     /// <summary>Looks for a newer release on GitHub when SoulScreen starts, and again every
@@ -488,6 +606,10 @@ public sealed class AppSettings
         if (!Enum.IsDefined(ControlBarPlacement)) ControlBarPlacement = ControlBarPlacement.Floating;
         if (!Enum.IsDefined(ControlBarCorner)) ControlBarCorner = ControlBarCorner.BottomCentre;
 
+        // The tile budget is a hand-editable number; anything the grid cannot lay out reads
+        // as the four-tile maximum rather than zero phones mirrored.
+        if (MaxMirroredTiles is < 1 or > 4) MaxMirroredTiles = 4;
+
         // The free-position fractions are 0..1 against the picture's edges; anything else was
         // typed by hand into a settings file, or corrupted on the way in, and would place the
         // bar off-screen.
@@ -542,6 +664,36 @@ public sealed class AppSettings
         // Timestamps is a complex object; null-safe + clamp the enum.
         Timestamps ??= new TimestampSettings();
         if (!Enum.IsDefined(Timestamps.FirstDay)) Timestamps.FirstDay = FirstDayOfWeek.Saturday;
+
+        // A hand-edited rule can hold a stray flag combination or a negative duration; the
+        // schedule already treats None as "never fires", so nothing further is dropped here -
+        // only the shapes that would otherwise crash the picker or the day-of-week arithmetic.
+        RecurringRecordings ??= [];
+        RecurringRecordings.RemoveAll(rule => rule is null);
+        foreach (var rule in RecurringRecordings)
+        {
+            if (string.IsNullOrWhiteSpace(rule.Id)) rule.Id = Guid.NewGuid().ToString("N");
+            rule.Days &= RecordingDays.All;
+            if (rule.DurationMinutes < 0) rule.DurationMinutes = 0;
+        }
+
+        // A lock with no hash cannot be enabled - a hand-edited "Enabled: true" with nothing
+        // else would otherwise lock the app out permanently with no PIN that could open it.
+        Lock ??= new LockSettings();
+        if (string.IsNullOrEmpty(Lock.ProtectedSaltBase64) || string.IsNullOrEmpty(Lock.ProtectedHashBase64))
+            Lock.Enabled = false;
+        if (Lock.Iterations <= 0) Lock.Iterations = Logic.AppLock.DefaultIterations;
+        if (Lock.AutoLockAfterMinutesIdle < 0) Lock.AutoLockAfterMinutesIdle = 0;
+        if (Lock.ConsecutiveFailures < 0) Lock.ConsecutiveFailures = 0;
+
+        // A watermark that cannot be drawn (bad enum, out-of-range slider dragged in a hand-
+        // edited file) should still degrade to something sane rather than throw mid-capture.
+        Watermark ??= new WatermarkSettings();
+        if (!Enum.IsDefined(Watermark.Corner)) Watermark.Corner = WatermarkCorner.BottomRight;
+        Watermark.Scale = Math.Clamp(Watermark.Scale, WatermarkPlacement.MinScale, WatermarkPlacement.MaxScale);
+        Watermark.Opacity = Math.Clamp(Watermark.Opacity, 0, 1);
+        Watermark.MarginFraction = Math.Clamp(Watermark.MarginFraction, 0, 0.5);
+        if (Watermark.Enabled && string.IsNullOrWhiteSpace(Watermark.ImagePath)) Watermark.Enabled = false;
     }
 
     /// <summary>Folds any angle onto one of the four the picture can be shown at.</summary>

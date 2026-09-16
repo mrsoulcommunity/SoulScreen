@@ -116,6 +116,7 @@ public partial class MainWindow : Window
         InitialiseMarkup();
         InitialiseHotkeysAndTaskbar();
         InitialiseUpdates();
+        InitialiseLock();
 
         WarningList.ItemsSource = _warnings;
 
@@ -304,6 +305,8 @@ public partial class MainWindow : Window
         _receiver.VideoFormatChanged += OnVideoFormatChanged;
         _pipeline?.Attach(_receiver);
         _audio?.Attach(_receiver);
+        // Sets the tile budget from EnableMultiDevice before StartAsync can accept sessions.
+        ////InitialiseMultiDevice(_receiver);
 
         try
         {
@@ -333,6 +336,7 @@ public partial class MainWindow : Window
             receiver.StateChanged -= OnReceiverStateChanged;
             receiver.VideoFormatChanged -= OnVideoFormatChanged;
             await receiver.DisposeAsync();
+            ////DisposeMultiDevice();
         }
 
         var demo = _demo;
