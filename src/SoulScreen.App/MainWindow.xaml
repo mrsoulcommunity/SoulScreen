@@ -1088,39 +1088,36 @@
                                 <TextBlock Text="SECURITY" Style="{StaticResource SectionTitle}" />
                                 <Border Style="{StaticResource Card}">
                                     <StackPanel>
-                                        <controls:SettingRow Title="Lock with a PIN" IsFirst="True" Stacked="True"
+                                        <controls:SettingRow Title="Lock with a PIN" IsFirst="True"
                                                              Detail="Guards the window from anyone else with access to this unlocked PC - separate from Windows' own lock screen. Forgetting the PIN means turning the lock off and on again from an unlocked session; there is no recovery.">
-                                            <StackPanel>
-                                                <CheckBox x:Name="LockEnabledCheck" Content="Require a PIN to open SoulScreen" Style="{StaticResource Switch}"
-                                                          Click="OnLockEnabledChanged" />
-                                                <StackPanel x:Name="LockConfiguredPanel" Margin="0,10,0,0">
-                                                    <Button x:Name="LockChangePinButton" Content="Change PIN" Style="{StaticResource SmallButton}"
-                                                            HorizontalAlignment="Left" Click="OnChangeLockPin" />
-                                                </StackPanel>
-                                                <!-- The PIN setup panel: shown when the switch above is first turned on,
-                                                     or when "Change PIN" is pressed. A new PIN is typed twice, the same as
-                                                     a password field anywhere else, since there is no recovery if it is
-                                                     mistyped once and saved wrong. -->
-                                                <Border x:Name="LockSetupPanel" Visibility="Collapsed" Background="{DynamicResource SurfaceSunken}"
-                                                        CornerRadius="8" Padding="12,10" Margin="0,10,0,0">
-                                                    <StackPanel>
-                                                        <TextBlock Text="New PIN (4 to 8 digits)" Style="{StaticResource Caption}" Margin="0,0,0,4" />
-                                                        <PasswordBox x:Name="LockSetupPinBox" MaxLength="8" MaxWidth="160" HorizontalAlignment="Left"
-                                                                     AutomationProperties.Name="New PIN" />
-                                                        <TextBlock Text="Confirm PIN" Style="{StaticResource Caption}" Margin="0,10,0,4" />
-                                                        <PasswordBox x:Name="LockSetupConfirmBox" MaxLength="8" MaxWidth="160" HorizontalAlignment="Left"
-                                                                     AutomationProperties.Name="Confirm PIN" KeyDown="OnLockSetupConfirmKeyDown" />
-                                                        <TextBlock x:Name="LockSetupError" Style="{StaticResource Caption}" Foreground="{DynamicResource Danger}"
-                                                                   Margin="0,8,0,0" TextWrapping="Wrap" Visibility="Collapsed" />
-                                                        <WrapPanel Margin="0,12,0,0">
-                                                            <Button Content="Save PIN" Style="{StaticResource SmallButton}" Margin="0,0,8,0"
-                                                                    Click="OnSaveLockPin" />
-                                                            <Button Content="Cancel" Style="{StaticResource SmallButton}" Click="OnCancelLockSetup" />
-                                                        </WrapPanel>
-                                                    </StackPanel>
-                                                </Border>
-                                            </StackPanel>
+                                            <CheckBox x:Name="LockEnabledCheck" Style="{StaticResource Switch}" Click="OnLockEnabledChanged" />
                                         </controls:SettingRow>
+                                        <StackPanel x:Name="LockConfiguredPanel" Margin="14,0,14,13">
+                                            <Button x:Name="LockChangePinButton" Content="Change PIN" Style="{StaticResource SmallButton}"
+                                                    HorizontalAlignment="Left" Click="OnChangeLockPin" />
+                                        </StackPanel>
+                                        <!-- The PIN setup panel: shown when the switch above is first turned on,
+                                             or when "Change PIN" is pressed. A new PIN is typed twice, the same as
+                                             a password field anywhere else, since there is no recovery if it is
+                                             mistyped once and saved wrong. -->
+                                        <Border x:Name="LockSetupPanel" Visibility="Collapsed" Background="{DynamicResource SurfaceSunken}"
+                                                CornerRadius="8" Padding="12,10" Margin="14,0,14,13">
+                                            <StackPanel>
+                                                <TextBlock Text="New PIN (4 to 8 digits)" Style="{StaticResource Caption}" Margin="0,0,0,4" />
+                                                <PasswordBox x:Name="LockSetupPinBox" MaxLength="8" MaxWidth="160" HorizontalAlignment="Left"
+                                                             AutomationProperties.Name="New PIN" />
+                                                <TextBlock Text="Confirm PIN" Style="{StaticResource Caption}" Margin="0,10,0,4" />
+                                                <PasswordBox x:Name="LockSetupConfirmBox" MaxLength="8" MaxWidth="160" HorizontalAlignment="Left"
+                                                             AutomationProperties.Name="Confirm PIN" KeyDown="OnLockSetupConfirmKeyDown" />
+                                                <TextBlock x:Name="LockSetupError" Style="{StaticResource Caption}" Foreground="{DynamicResource Danger}"
+                                                           Margin="0,8,0,0" TextWrapping="Wrap" Visibility="Collapsed" />
+                                                <WrapPanel Margin="0,12,0,0">
+                                                    <Button Content="Save PIN" Style="{StaticResource SmallButton}" Margin="0,0,8,0"
+                                                            Click="OnSaveLockPin" />
+                                                    <Button Content="Cancel" Style="{StaticResource SmallButton}" Click="OnCancelLockSetup" />
+                                                </WrapPanel>
+                                            </StackPanel>
+                                        </Border>
                                         <controls:SettingRow x:Name="LockOnLaunchRow" Title="Lock as soon as SoulScreen starts"
                                                              Detail="Nothing is shown, even a mirrored phone, until the PIN is entered.">
                                             <CheckBox x:Name="LockOnLaunchCheck" Style="{StaticResource Switch}" Click="OnLockOptionChanged" />
