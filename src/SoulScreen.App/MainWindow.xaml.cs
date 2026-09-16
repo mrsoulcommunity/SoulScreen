@@ -115,6 +115,7 @@ public partial class MainWindow : Window
         InitialiseSettingsNav();
         InitialiseMarkup();
         InitialiseHotkeysAndTaskbar();
+        InitialiseUpdates();
 
         WarningList.ItemsSource = _warnings;
 
@@ -623,17 +624,88 @@ public partial class MainWindow : Window
         // A new session starts with empty counters, wherever the last one left them.
         _sessionTally.Clear();
         _connectionAdvice.Reset();
+        _connectionTrend.Reset();
 
         if (_sessionIsDemo)
         {
-            ShowToast("Demo running - Disconnect ends it", "");
+            ShowToast("Demo running - Disconnect ends it", "");
             return true;
         }
 
+        // Every known iPhone keeps its own accent, picture mapping and auto-record choice;
+        // one connecting for the first time gets a fresh, default profile of its own to grow.
+        _sessionAutoRecord = false;
+        if (_sessionDevice is { } known) _sessionAutoRecord = ApplyDeviceProfile(known);
+
         var name = _sessionDevice?.Name ?? "iPhone";
-        ShowToast($"{name} connected", "");
+        ShowToast($"{name} connected", "");
         NotifyFromTray($"{name} connected", "Screen mirroring has started.");
         return true;
+    }
+
+    /// <summary>Whether the device now on screen is to be recorded automatically, from its
+    /// own profile rather than the general "record on connect" setting.</summary>
+    private bool _sessionAutoRecord;
+
+    /// <summary>
+    /// Loads a phone's own picture settings - accent, fit, rotation, mirroring - onto the
+    /// window, building a fresh default profile first if this phone has never mirrored here
+    /// before. Silent where a device profile changes nothing, so a session that matches the
+    /// window already is not announced as if something moved.
+    /// </summary>
+    /// <returns>Whether this phone is to be recorded automatically.</returns>
+    private bool ApplyDeviceProfile(SourceDeviceInfo device)
+    {
+        if (!Logic.DeviceProfiles.IsKnown(_settings.RecentDevices, device.Name, device.Model))
+        {
+            Logic.DeviceProfiles.Save(_settings.RecentDevices, device.Name, device.Model, Logic.DeviceProfiles.Profile.Default);
+            _settings.Save();
+        }
+
+        var profile = Logic.DeviceProfiles.Resolve(_settings.RecentDevices, device.Name, device.Model);
+
+        var changed = _settings.Accent != profile.Accent || _settings.VideoFit != profile.VideoFit
+            || _settings.Rotation != profile.Rotation || _settings.MirrorHorizontally != profile.MirrorHorizontally;
+        if (changed)
+        {
+            _settings.Accent = profile.Accent;
+            _settings.VideoFit = profile.VideoFit;
+            _settings.Rotation = profile.Rotation;
+            _settings.MirrorHorizontally = profile.MirrorHorizontally;
+            _settings.Save();
+
+            ThemeManager.Apply(_settings.Theme, _settings.Accent, animate: true);
+            ApplyPictureSettings();
+            SyncPictureControls();
+            _populatingSettings = true;
+            try { SyncAccentSwatches(); }
+            finally { _populatingSettings = false; }
+        }
+
+        return profile.AutoRecord;
+    }
+
+    /// <summary>
+    /// Saves whatever the accent, fit, rotation or mirroring now are onto the phone on
+    /// screen's own profile, so the next time it connects it picks up where this session left
+    /// off. A no-op outside a live, non-demo session: settings changed on the idle screen, or
+    /// against the test pattern, belong to no phone.
+    /// </summary>
+    private void SaveActiveDeviceProfile()
+    {
+        if (_sessionIsDemo || VideoHost.Visibility != Visibility.Visible) return;
+        if (_sessionDevice is not { } device) return;
+
+        var existing = Logic.DeviceProfiles.Resolve(_settings.RecentDevices, device.Name, device.Model);
+        var profile = existing with
+        {
+            Accent = _settings.Accent,
+            VideoFit = _settings.VideoFit,
+            Rotation = _settings.Rotation,
+            MirrorHorizontally = _settings.MirrorHorizontally,
+        };
+        Logic.DeviceProfiles.Save(_settings.RecentDevices, device.Name, device.Model, profile);
+        _settings.Save();
     }
 
     /// <summary>What the user asked to happen whenever a phone starts mirroring.</summary>
@@ -653,7 +725,7 @@ public partial class MainWindow : Window
             ToggleFullscreen();
 
         // A recording nobody asked for of a test pattern is clutter, not a feature.
-        if (_settings.RecordOnConnect && !_sessionIsDemo && RecordButton.IsEnabled && RecordButton.IsChecked != true)
+        if ((_settings.RecordOnConnect || _sessionAutoRecord) && !_sessionIsDemo && RecordButton.IsEnabled && RecordButton.IsChecked != true)
             RecordButton.IsChecked = true;
     }
 
@@ -668,7 +740,8 @@ public partial class MainWindow : Window
         if (_sessionStartedUtc is not { } started) return;
         if (_userStopRequested && reason == SessionEndReason.PhoneEnded) reason = SessionEndReason.StoppedByUser;
         _userStopRequested = false;
-        var duration = DateTime.UtcNow - started;
+        var startedUtc = started;
+        var duration = DateTime.UtcNow - startedUtc;
         var device = _sessionDevice;
         _sessionStartedUtc = null;
         _sessionDevice = null;
@@ -695,8 +768,9 @@ public partial class MainWindow : Window
             if (!_shuttingDown)
             {
                 var detail = summary.DeservesToast ? summary.Detail : null;
-                ShowToast(summary.Headline, "\uE8BB", detail is null ? null : "View", ShowCaptures);
-                NotifyFromTray($"{info.Name} disconnected", $"{summary.Headline}{(detail is null ? "" : $" - {detail}")}.");
+                var headline = summary.HeadlineWithStart(startedUtc.ToLocalTime(), _settings.Timestamps);
+                ShowToast(headline, "\uE8BB", detail is null ? null : "View", ShowCaptures);
+                NotifyFromTray($"{info.Name} disconnected", $"{headline}{(detail is null ? "" : $" - {detail}")}.");
             }
         }
     }
@@ -1088,8 +1162,21 @@ public partial class MainWindow : Window
         _hotkeys?.Dispose();
         _laserTimer?.Stop();
         _snapTimer?.Stop();
+        DisposeUpdates();
         StopViewerMedia();
         Video.Dispose();
+
+        // A clip export holds an open recording file and a background encode; letting the
+        // process end mid-write would leave a half-finished GIF or WebM in the capture
+        // folder rather than nothing at all.
+        if (_clipExport is { } clipExport)
+        {
+            clipExport.Cancel();
+            if (_clipExportTask is { } task)
+            {
+                try { await task; } catch (Exception ex) { _log.Warn("clip export did not stop cleanly", ex); }
+            }
+        }
 
         try { await StopReceiverAsync(); }
         catch (Exception ex) { _log.Warn("shutdown was not clean", ex); }

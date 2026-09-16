@@ -1,3 +1,6 @@
+using System.Globalization;
+using SoulScreen.Core.Time;
+
 namespace SoulScreen.App.Logic;
 
 /// <summary>
@@ -46,6 +49,18 @@ public sealed record SessionSummary(
             if (Reason is SessionEndReason.StoppedByUser or SessionEndReason.Faulted) sentence += " · ended here";
             return sentence;
         }
+    }
+
+    /// <summary>
+    /// Headline with a leading timestamp, locale-aware: when Shamsi is on the start time
+    /// is in Persian, with the Gregorian in parentheses when both are configured.
+    /// </summary>
+    public string HeadlineWithStart(DateTime startedAtLocal, TimestampSettings timestamps)
+    {
+        var mode = TimestampFormatting.Resolve(
+            timestamps.UseShamsi, timestamps.ShowGregorianAlongside, CultureInfo.CurrentCulture);
+        var stamp = TimestampFormatting.FormatDateTime(startedAtLocal, mode);
+        return $"{stamp} · {Headline}";
     }
 
     /// <summary>The toast's second line, or null when there is nothing to count.</summary>

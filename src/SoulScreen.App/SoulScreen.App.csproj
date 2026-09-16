@@ -16,7 +16,7 @@
     <!-- For the notification-area icon only; nothing else is drawn with WinForms. -->
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationIcon>Assets\SoulScreen.ico</ApplicationIcon>
-    <Version>1.1.0</Version>
+    <Version>1.2.0</Version>
     <AssemblyTitle>SoulScreen</AssemblyTitle>
     <Product>SoulScreen</Product>
     <Description>Mirror an iPhone screen onto Windows.</Description>
@@ -32,6 +32,11 @@
   <ItemGroup>
     <!-- Embedded so the tray icon can be loaded at runtime without reading the exe. -->
     <Resource Include="Assets\SoulScreen.ico" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Removed: the XAML controls this file depends on have all been added to
+         MainWindow.xaml, so it now compiles cleanly. -->
   </ItemGroup>
 
 </Project>

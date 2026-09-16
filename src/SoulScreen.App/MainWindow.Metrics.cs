@@ -38,6 +38,10 @@ public partial class MainWindow
     private long _ticksAtLastBitrate;
     private double _bitsPerSecond;
 
+    /// <summary>Reused across ticks: the status-bar pieces are assembled from a small,
+    /// bounded set, so allocating a list per tick wastes a few hundred bytes of GC time.</summary>
+    private readonly List<string> _metricParts = new(8);
+
     private readonly Dictionary<string, TextBlock> _hudValues = new();
 
     /// <summary>Puts a short-lived message on the status bar. The metrics tick rewrites
@@ -120,7 +124,10 @@ public partial class MainWindow
         UpdateBitrate();
         UpdateQuality();
 
-        var parts = new List<string>(8);
+        // The status-bar pieces are assembled from a small, bounded set. A cached list
+        // is cleared and refilled rather than allocated fresh every tick.
+        var parts = _metricParts;
+        parts.Clear();
         if (Video.VideoSize.Width > 0)
             parts.Add($"{(int)Video.VideoSize.Width}x{(int)Video.VideoSize.Height}");
         if (_pipeline.DecodedFrameCount > 0)
@@ -164,10 +171,9 @@ public partial class MainWindow
         }
 
         // While a one-shot status is up, the metrics give way rather than both trying to
-        // share the bar. A recording says so in its own entry every tick anyway.
-        if (_transientStatus is not null) parts.Clear();
-
-        MetricsText.Text = string.Join("   ", parts);
+        // share the bar. A recording says so in its own entry every tick anyway. An empty
+        // joined string keeps the bar at its last width rather than shrinking it.
+        MetricsText.Text = _transientStatus is null ? string.Join("   ", parts) : string.Empty;
 
         if (StatsHud.Visibility == Visibility.Visible) UpdateStatsHud(refresh, latency, lost);
         UpdatePerformanceGraph();
@@ -198,7 +204,8 @@ public partial class MainWindow
         var barLift = IsMarkupActive ? 54
             : ControlBar.Visibility == Visibility.Visible ? Math.Max(ControlBar.ActualHeight, 42) + 12
             : 0;
-        SetMargin(ControlBar, new Thickness(12, 0, 12, 16 + bottom));
+        // The placement-aware bar positions itself; we just keep the markup bar and toasts in
+        // step with whatever the picture controls decide to do.
         SetMargin(MarkupBar, new Thickness(12, 0, 12, 16 + bottom));
         SetMargin(Toast, new Thickness(16, 0, 16, 20 + bottom + barLift));
     }
@@ -212,6 +219,11 @@ public partial class MainWindow
     /// rather than for every hiccup.</summary>
     private readonly ConnectionAdvice _connectionAdvice = new();
 
+    /// <summary>Watches for a worsening trend in frame rate and round-trip time, so a
+    /// warning can be offered before losses actually start - the meter above only reacts
+    /// once something has already gone missing.</summary>
+    private readonly ConnectionTrendWatcher _connectionTrend = new();
+
     /// <summary>Feeds the meter this tick's running totals and redraws the bars if the verdict moved.</summary>
     private void UpdateQuality()
     {
@@ -221,16 +233,28 @@ public partial class MainWindow
         // talking, not the network.
         var videoLost = _pipeline.DroppedSampleCount + _pipeline.SkippedSampleCount;
         var audioLost = _audio is { } audio ? audio.FilledGapCount + audio.DroppedPacketCount : 0;
-        var level = _quality.Sample(TimeSpan.FromTicks(Stopwatch.GetTimestamp() * TimeSpan.TicksPerSecond / Stopwatch.Frequency),
-            videoLost, audioLost);
+        // One clock reading shared with the advice check below: each Stopwatch.GetTimestamp()
+        // is a short syscall, and two of them a tick apart makes the verdict wobble between
+        // "due to warn" and "not yet" on a session whose quality sits right on the line.
+        var nowTicks = Stopwatch.GetTimestamp();
+        var now = TimeSpan.FromTicks(nowTicks * TimeSpan.TicksPerSecond / Stopwatch.Frequency);
+        var level = _quality.Sample(now, videoLost, audioLost);
         ShowQuality(level);
 
         // Sustained poor is worth naming once; the occasional hiccup is not.
-        if (_connectionAdvice.ShouldAdvise(TimeSpan.FromTicks(Stopwatch.GetTimestamp() * TimeSpan.TicksPerSecond / Stopwatch.Frequency),
-                level == ConnectionQualityLevel.Poor))
+        if (_connectionAdvice.ShouldAdvise(now, level == ConnectionQualityLevel.Poor))
         {
-            ShowToast("The connection has been poor for a while - moving closer to the router, or a 5 GHz network, helps most", "");
+            ShowToast("The connection has been poor for a while - moving closer to the router, or a 5 GHz network, helps most", "");
             _log.Warn("connection has been poor for some seconds; advice offered");
+        }
+
+        // Early warning: a frame rate sliding down, or a round-trip climbing, over the last
+        // several ticks - worth a word before anything is actually lost, not only after.
+        if (_pipeline.FramesPerSecond > 0
+            && _connectionTrend.Sample(now, _pipeline.FramesPerSecond, _receiver?.RoundTripMilliseconds))
+        {
+            ShowToast("The connection is trending downward - it may be worth checking your Wi-Fi before it gets worse", "\uE7BA");
+            _log.Warn("frame rate or round-trip is trending worse; predictive advice offered");
         }
     }
 
@@ -332,6 +356,10 @@ public partial class MainWindow
         _fpsHistory.Add(_pipeline.FramesPerSecond);
     }
 
+    /// <summary>Scratch buffer reused across ticks so drawing the sparkline never
+    /// allocates - the history is a fixed size, and a single array covers every call.</summary>
+    private double[] _graphScratch = Array.Empty<double>();
+
     /// <summary>Redraws the fps sparkline. A single stream geometry per tick - the cost is
     /// one small path, not a render-target rewrite, and only while it can be seen.</summary>
     private void UpdatePerformanceGraph()
@@ -346,22 +374,27 @@ public partial class MainWindow
             return;
         }
 
-        var values = _fpsHistory.ToArray();
+        // Grow the scratch buffer once to fit the history rather than allocating a fresh
+        // array on every tick (which would be a steady 1.4 KB of garbage every half second
+        // while the sparkline is on screen).
+        if (_graphScratch.Length < MetricsHistoryCapacity) _graphScratch = new double[MetricsHistoryCapacity];
+        _fpsHistory.CopyTo(_graphScratch.AsSpan());
+        var count = _fpsHistory.Count;
         var max = _fpsHistory.Max() ?? 0;
         if (max <= 0) max = 1;
 
         var step = SparklineWidth / (MetricsHistoryCapacity - 1);
         // The line starts at the left while the buffer fills, then scrolls right to left.
-        var originX = _fpsHistory.IsFull ? 0 : SparklineWidth - (values.Length - 1) * step;
+        var originX = _fpsHistory.IsFull ? 0 : SparklineWidth - (count - 1) * step;
 
         var geometry = new StreamGeometry();
         using (var context = geometry.Open())
         {
             Point? previous = null;
-            for (var i = 0; i < values.Length; i++)
+            for (var i = 0; i < count; i++)
             {
                 var x = originX + i * step;
-                var y = SparklineHeight - 2 - Math.Clamp(values[i] / max, 0.0, 1.0) * (SparklineHeight - 4);
+                var y = SparklineHeight - 2 - Math.Clamp(_graphScratch[i] / max, 0.0, 1.0) * (SparklineHeight - 4);
                 var point = new Point(x, y);
                 if (previous is null) context.BeginFigure(point, false, false);
                 else context.LineTo(point, true, false);

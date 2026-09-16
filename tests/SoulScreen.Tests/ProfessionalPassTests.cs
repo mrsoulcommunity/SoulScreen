@@ -263,11 +263,20 @@ public class DisplayLayoutTests
     }
 
     [Fact]
-    public void AnOutOfRangeIndexIsIgnored()
+    public void ANegativeOrNonsenseIndexIsIgnored()
     {
-        Assert.Null(DisplayLayout.Resolve("7", TwoDisplays(), new RectBounds(100, 100, 800, 600)));
         Assert.Null(DisplayLayout.Resolve("-1", TwoDisplays(), new RectBounds(100, 100, 800, 600)));
         Assert.Null(DisplayLayout.Resolve("nonsense", TwoDisplays(), new RectBounds(100, 100, 800, 600)));
+    }
+
+    /// <summary>The saved monitor was unplugged, or the settings file moved to a PC with
+    /// fewer screens: the window still needs somewhere sensible to go.</summary>
+    [Fact]
+    public void AMonitorThatNoLongerExistsFallsBackToPrimary()
+    {
+        var resolved = DisplayLayout.Resolve("7", TwoDisplays(), new RectBounds(100, 100, 800, 600));
+        Assert.NotNull(resolved);
+        Assert.True(resolved!.IsPrimary);
     }
 
     [Fact]

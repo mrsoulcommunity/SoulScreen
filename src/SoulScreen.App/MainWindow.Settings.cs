@@ -7,6 +7,7 @@ using Microsoft.Win32;
 using SoulScreen.AirPlay.FairPlay;
 using SoulScreen.App.Logic;
 using SoulScreen.Core.Logging;
+using SoulScreen.Core.Time;
 using SoulScreen.Media;
 
 namespace SoulScreen.App;
@@ -34,7 +35,10 @@ public partial class MainWindow
 
     private const string CustomPresetLabel = "Custom…";
 
-    private sealed record RecentDeviceView(string Name, string Summary, string LastSeen);
+    private sealed record RecentDeviceView(string Name, string? Model, string Summary, string LastSeen, bool AutoRecord)
+    {
+        public string AutoRecordAutomationName => $"Start recording automatically when {Name} connects";
+    }
 
     // ------------------------------------------------------------------ opening
 
@@ -101,6 +105,21 @@ public partial class MainWindow
             PerformanceGraphRow.IsEnabled = _settings.ShowStats;
             RoundedCornersCheck.IsChecked = _settings.RoundedCorners;
 
+            // Picture controls placement: a segmented picker for the placement itself, with
+            // a second picker for which corner when "in a corner" is the chosen mode. Both
+            // pickers have to agree about the current state, or the saved pick will not be
+            // the one that shows when the settings panel is reopened.
+            ControlBarPlacementFloating.IsChecked = _settings.ControlBarPlacement == ControlBarPlacement.Floating;
+            ControlBarPlacementCorner.IsChecked = _settings.ControlBarPlacement == ControlBarPlacement.Corner;
+            ControlBarPlacementFree.IsChecked = _settings.ControlBarPlacement == ControlBarPlacement.Free;
+            ControlBarPlacementDocked.IsChecked = _settings.ControlBarPlacement == ControlBarPlacement.Docked;
+            ControlBarCornerTL.IsChecked = _settings.ControlBarCorner == ControlBarCorner.TopLeft;
+            ControlBarCornerTR.IsChecked = _settings.ControlBarCorner == ControlBarCorner.TopRight;
+            ControlBarCornerBL.IsChecked = _settings.ControlBarCorner == ControlBarCorner.BottomLeft;
+            ControlBarCornerBR.IsChecked = _settings.ControlBarCorner == ControlBarCorner.BottomRight;
+            ControlBarCornerBC.IsChecked = _settings.ControlBarCorner == ControlBarCorner.BottomCentre;
+            ControlBarCornerRow.Visibility = _settings.ControlBarPlacement == ControlBarPlacement.Corner
+                ? Visibility.Visible : Visibility.Collapsed;
             SyncCaptureBudget();
             AnimationsSystem.IsChecked = _settings.Animations == MotionPreference.FollowWindows;
             AnimationsOn.IsChecked = _settings.Animations == MotionPreference.AlwaysOn;
@@ -136,11 +155,34 @@ public partial class MainWindow
             ReceiverApplyBar.Visibility = Visibility.Collapsed;
             ReceiverError.Visibility = Visibility.Collapsed;
             ClearFieldErrors();
+
+            // Regional: timestamps. A three-way UseShamsi toggle (off / on / follow culture)
+            // maps to a 2-state checkbox plus the resolved state for the preview row.
+            UseShamsiCheck.IsChecked = _settings.Timestamps.UseShamsi == true;
+            ShowGregorianCheck.IsChecked = _settings.Timestamps.ShowGregorianAlongside;
+            FirstDayBox.SelectedIndex = _settings.Timestamps.FirstDay switch
+            {
+                FirstDayOfWeek.Sunday => 1,
+                FirstDayOfWeek.Monday => 2,
+                _ => 0,
+            };
+            UpdateTimestampPreview();
         }
         finally
         {
             _populatingSettings = false;
         }
+    }
+
+    private void UpdateTimestampPreview()
+    {
+        if (TimestampPreview is null) return;
+        var now = DateTime.Now;
+        var mode = TimestampFormatting.Resolve(
+            _settings.Timestamps.UseShamsi,
+            _settings.Timestamps.ShowGregorianAlongside,
+            CultureInfo.CurrentCulture);
+        TimestampPreview.Text = $"Today: {TimestampFormatting.FormatDateTime(now, mode)}";
     }
 
     /// <summary>Puts the fit, rotation and mirror controls in step with the settings. Called
@@ -235,6 +277,42 @@ public partial class MainWindow
         ThemeManager.Apply(theme, _settings.Accent, animate: true);
     }
 
+    private void OnTimestampSettingChanged(object sender, RoutedEventArgs e)
+    {
+        if (_populatingSettings) return;
+        // The checkbox is a 2-state view of a 3-state setting: "off" is explicit false,
+        // "on" is explicit true. Reverting to "follow the culture" is a separate UI affordance
+        // we can add later; for now explicit-true-or-false covers the prompt's contract.
+        _settings.Timestamps.UseShamsi = UseShamsiCheck.IsChecked == true;
+        _settings.Timestamps.ShowGregorianAlongside = ShowGregorianCheck.IsChecked == true;
+        _settings.Save();
+        UpdateTimestampPreview();
+        RefreshTimestamps();
+    }
+
+    private void OnFirstDayChanged(object sender, SelectionChangedEventArgs e)
+    {
+        if (_populatingSettings || FirstDayBox.SelectedIndex < 0) return;
+        _settings.Timestamps.FirstDay = FirstDayBox.SelectedIndex switch
+        {
+            1 => FirstDayOfWeek.Sunday,
+            2 => FirstDayOfWeek.Monday,
+            _ => FirstDayOfWeek.Saturday,
+        };
+        _settings.Save();
+        UpdateTimestampPreview();
+    }
+
+    /// <summary>Re-renders every surface that shows a timestamp: gallery, log, session
+    /// summary preview. Called when the toggle changes so a user sees the effect at once.</summary>
+    private void RefreshTimestamps()
+    {
+        RefreshCaptures();
+        RefreshLogPanel();
+        // The session summary is built and immediately shown; the next one picks up the new
+        // mode. No need to re-paint the current one (it's already dismissed by then).
+    }
+
     private void OnFitChanged(object sender, RoutedEventArgs e)
     {
         if (_populatingSettings) return;
@@ -260,6 +338,29 @@ public partial class MainWindow
     {
         if (_populatingSettings) return;
         SetRoundedCorners(RoundedCornersCheck.IsChecked == true);
+    }
+
+    private void OnControlBarPlacementChanged(object sender, RoutedEventArgs e)
+    {
+        if (_populatingSettings) return;
+        var placement = ControlBarPlacementFloating.IsChecked == true ? ControlBarPlacement.Floating
+            : ControlBarPlacementCorner.IsChecked == true ? ControlBarPlacement.Corner
+            : ControlBarPlacementFree.IsChecked == true ? ControlBarPlacement.Free
+            : ControlBarPlacement.Docked;
+        // The corner picker only matters in Corner mode; show or hide it to match.
+        ControlBarCornerRow.Visibility = placement == ControlBarPlacement.Corner
+            ? Visibility.Visible : Visibility.Collapsed;
+        SetControlBarPlacement(placement);
+    }
+
+    private void OnControlBarCornerChanged(object sender, RoutedEventArgs e)
+    {        if (_populatingSettings) return;
+        var corner = ControlBarCornerTL.IsChecked == true ? ControlBarCorner.TopLeft
+            : ControlBarCornerTR.IsChecked == true ? ControlBarCorner.TopRight
+            : ControlBarCornerBL.IsChecked == true ? ControlBarCorner.BottomLeft
+            : ControlBarCornerBR.IsChecked == true ? ControlBarCorner.BottomRight
+            : ControlBarCorner.BottomCentre;
+        SetCornerPlacement(corner);
     }
 
     private void SetRoundedCorners(bool rounded)
@@ -769,8 +870,10 @@ public partial class MainWindow
         var devices = _settings.RecentDevices.OrderByDescending(d => d.LastSeenUtc).ToList();
         RecentList.ItemsSource = devices.Select(d => new RecentDeviceView(
             d.Name,
+            d.Model,
             $"{(d.Model is null ? "" : d.Model + " · ")}{d.SessionCount} session{(d.SessionCount == 1 ? "" : "s")} · {FormatDuration(TimeSpan.FromSeconds(d.TotalSeconds))}",
-            FormatRelative(d.LastSeenUtc))).ToList();
+            FormatRelative(d.LastSeenUtc),
+            d.AutoRecord)).ToList();
         NoRecentText.Visibility = devices.Count == 0 ? Visibility.Visible : Visibility.Collapsed;
         RecentSummary.Visibility = devices.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
         RecentFooter.Visibility = devices.Count == 0 ? Visibility.Collapsed : Visibility.Visible;
@@ -797,6 +900,22 @@ public partial class MainWindow
         _settings.RecentDevices.Clear();
         _settings.Save();
         RefreshRecentList();
+    }
+
+    /// <summary>Flips one phone's own auto-record switch, independent of every other
+    /// phone's and of the general "record on connect" setting.</summary>
+    private void OnRecentDeviceAutoRecordChanged(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.DataContext is not RecentDeviceView view) return;
+        if (sender is not CheckBox box) return;
+
+        var profile = Logic.DeviceProfiles.Resolve(_settings.RecentDevices, view.Name, view.Model) with
+        {
+            AutoRecord = box.IsChecked == true,
+        };
+        Logic.DeviceProfiles.Save(_settings.RecentDevices, view.Name, view.Model, profile);
+        _settings.Save();
+        ShowToast(profile.AutoRecord ? $"{view.Name} will always record" : $"{view.Name} no longer records automatically", "");
     }
 
     // ------------------------------------------------------------------ about

@@ -28,19 +28,28 @@ public static class DisplayLayout
         if (displays.Count == 0 || windowBounds.IsEmpty) return null;
         if (string.IsNullOrEmpty(choice) || choice == CurrentDisplay) return null;
 
-        if (choice == PrimaryDisplay)
-            return displays.FirstOrDefault(d => !d.WorkArea.IsEmpty && d.IsPrimary)
-                ?? displays.FirstOrDefault(d => !d.WorkArea.IsEmpty);
+        if (choice == PrimaryDisplay) return ResolvePrimary(displays);
 
-        if (int.TryParse(choice, System.Globalization.CultureInfo.InvariantCulture, out var index)
-            && index >= 0 && index < displays.Count)
+        if (int.TryParse(choice, System.Globalization.CultureInfo.InvariantCulture, out var index) && index >= 0)
         {
-            var chosen = displays[index];
-            return chosen.WorkArea.IsEmpty || IsOnDisplay(windowBounds, chosen.WorkArea) ? null : chosen;
+            if (index < displays.Count)
+            {
+                var chosen = displays[index];
+                return chosen.WorkArea.IsEmpty || IsOnDisplay(windowBounds, chosen.WorkArea) ? null : chosen;
+            }
+
+            // The monitor remembered by this index is no longer attached - unplugged, or a
+            // settings file carried to a PC with fewer screens. Falling back to the primary
+            // beats leaving the window wherever it happens to be.
+            return ResolvePrimary(displays);
         }
 
         return null;
     }
+
+    private static DisplayChoice? ResolvePrimary(IReadOnlyList<DisplayChoice> displays) =>
+        displays.FirstOrDefault(d => !d.WorkArea.IsEmpty && d.IsPrimary)
+        ?? displays.FirstOrDefault(d => !d.WorkArea.IsEmpty);
 
     public static bool IsOnDisplay(RectBounds window, RectBounds display)
     {

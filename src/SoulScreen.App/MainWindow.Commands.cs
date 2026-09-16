@@ -206,7 +206,7 @@ public partial class MainWindow
             {
                 var recording = RecordButton.IsChecked == true;
                 yield return new(recording ? "Stop recording" : "Start recording", "Capture",
-                    recording ? "" : "", "Ctrl+R", () => RecordButton.IsChecked = !recording, "video mp4 record");
+                    recording ? "\ue71a" : "\ue70f", "Ctrl+R", () => RecordButton.IsChecked = !recording, "video mp4 record");
                 var armed = _recordingTimer is { IsArmed: true };
                 yield return new(armed ? "Cancel the timed stop" : "Stop recording in 5 minutes", "Capture",
                     "", null, () =>
@@ -214,6 +214,17 @@ public partial class MainWindow
                         if (armed) OnMenuCancelTimedStop(this, new RoutedEventArgs());
                         else OnMenuRecordTimed(new System.Windows.Controls.MenuItem { Tag = "5" }, new RoutedEventArgs());
                     }, "timed stop countdown minutes limit");
+
+                if (!recording)
+                {
+                    var scheduled = _recordingSchedule is not null;
+                    yield return new(scheduled ? "Cancel the scheduled recording" : "Start recording in 5 minutes", "Capture",
+                        "\uEB52", null, () =>
+                        {
+                            if (scheduled) OnMenuCancelScheduledRecording(this, new RoutedEventArgs());
+                            else OnMenuScheduleRecording(new System.Windows.Controls.MenuItem { Tag = "5" }, new RoutedEventArgs());
+                        }, "schedule delayed start countdown minutes timer");
+                }
             }
 
             if (_settings.VideoFit != VideoFit.Fit)
@@ -275,9 +286,11 @@ public partial class MainWindow
         yield return new("Settings", "Go to", "", "Ctrl+,", () => SettingsButton.IsChecked = true, "preferences options");
         yield return new(LogPanel.Visibility == Visibility.Visible ? "Hide the activity log" : "Activity log", "Go to", "", "Ctrl+L",
             () => LogButton.IsChecked = LogButton.IsChecked != true, "log debug trace diagnostics");
-        yield return new("Keyboard shortcuts", "Go to", "", "F1", ToggleHelp, "keys help");
-        yield return new(_focusMode ? "Leave focus mode" : "Focus mode", "Window", "", "Ctrl+H", ToggleFocusMode,
+        yield return new("Keyboard shortcuts", "Go to", "\ue765", "F1", ToggleHelp, "keys help");
+        yield return new(_focusMode ? "Leave focus mode" : "Focus mode", "Window", "\ue7b3", "Ctrl+H", ToggleFocusMode,
             "focus hide chrome clean view presentation only the picture nothing else distraction");
+        yield return new(_presentationMode ? "End presentation mode" : "Presentation mode", "Window", "\ue740", "Ctrl+Shift+P",
+            TogglePresentationMode, "present teaching classroom fullscreen focus distraction free");
         yield return new(_settings.ShowPerformanceGraph ? "Hide the performance graph" : "Show the performance graph", "Go to", "",
             null, () => SetShowPerformanceGraph(!_settings.ShowPerformanceGraph), "sparkline fps graph overlay statistics performance");
 
@@ -299,7 +312,9 @@ public partial class MainWindow
         yield return new("Check the connection", "Go to", "\uE930", null, ShowDoctor,
             "troubleshoot doctor diagnose firewall network help cannot find missing not showing");
         yield return new("Welcome screen", "Go to", "\uE95A", null, ShowWelcome, "introduction tour getting started help");
-        yield return new("Open the capture folder", "Go to", "", null, () => OpenFolder(_settings.CaptureDirectory), "explorer files");
+        yield return new("Check for updates", "Go to", "\uEB52", null, () => ShowSettingsSection("UPDATES"),
+            "update version release download install upgrade github new build");
+        yield return new("Open the capture folder", "Go to", "", null, () => OpenFolder(_settings.CaptureDirectory), "explorer files");
         yield return new("Open the log folder", "Go to", "", null,
             () => OpenFolder(App.LogDirectory ?? System.IO.Path.Combine(AppSettings.Directory, "logs")), "explorer files");
 

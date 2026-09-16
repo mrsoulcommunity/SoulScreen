@@ -9,6 +9,7 @@ using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
 using SoulScreen.App.Logic;
+using SoulScreen.Core.Time;
 
 namespace SoulScreen.App;
 
@@ -54,7 +55,18 @@ public partial class MainWindow
 
         public Visibility PlayBadge => Kind == CaptureKind.Recording ? Visibility.Visible : Visibility.Collapsed;
 
-        public string AccessibleName => $"{(Kind == CaptureKind.Recording ? "Recording" : "Screenshot")}, {Title}";
+        public string AccessibleName
+        {
+            get
+            {
+                // The title already carries both calendars when both are configured (the
+                // formatter appends the Gregorian in parentheses). Exposing both is required
+                // for screen readers, so do not collapse "Both" down to a single calendar.
+                var stamp = Title;
+                var kind = Kind == CaptureKind.Recording ? "Recording" : "Screenshot";
+                return $"{kind}, {stamp}";
+            }
+        }
 
         public Brush? Thumbnail
         {
@@ -73,6 +85,7 @@ public partial class MainWindow
     {
         CaptureList.Tag = 170.0;
         CapturesScroller.SizeChanged += (_, _) => UpdateCaptureTileWidth();
+        CapturesToolbar.SizeChanged += (_, _) => UpdateCapturesToolbarLayout();
         // A gallery opened from the toolbar, the palette or the tray starts from everything,
         // so a search left behind does not hide captures from a fresh look.
         CapturesPanel.IsVisibleChanged += (_, _) =>
@@ -152,6 +165,11 @@ public partial class MainWindow
 
     private async void RefreshCaptures()
     {
+        // Snapshot the timestamp mode at the moment of refresh - FormatCaptureTime reads
+        // these statics when it builds each item's title, so the next render after a toggle
+        // change uses the new mode.
+        SetTimestampMode(_settings.Timestamps.UseShamsi, _settings.Timestamps.ShowGregorianAlongside);
+
         var generation = ++_captureGeneration;
         var directory = _settings.CaptureDirectory;
 
@@ -291,6 +309,86 @@ public partial class MainWindow
         }
     }
 
+    /// <summary>
+    /// Keeps the four parts of the captures toolbar on one line while the window is wide
+    /// enough, and moves the search + sort pair onto its own row when it is not. Moving the
+    /// element between hosts rather than swapping templates, so its state - the text being
+    /// typed, the sort chosen - rides along untouched. The move itself is faded and eased
+    /// so a resize reads as the toolbar folding, not controls teleporting.
+    /// </summary>
+    private void UpdateCapturesToolbarLayout()
+    {
+        if (CapturesToolbar.ActualWidth <= 0) return;
+
+        // How wide one line needs to be: the filter segments and the two icon buttons take
+        // what they take; the search + sort pair keeps a sensible floor even when squeezed.
+        const double searchAndSortFloor = 350;
+        const double iconButtons = 76;
+        var wanted = CapturesAll.ActualWidth + CapturesShots.ActualWidth + CapturesVideos.ActualWidth
+                     + searchAndSortFloor + iconButtons + 40; // margins and breathing room
+        var wrapped = CapturesToolsHost.Parent == CapturesToolsWrap;
+        var shouldWrap = CapturesToolbar.ActualWidth < wanted;
+
+        if (shouldWrap == wrapped) return;
+
+        if (shouldWrap)
+        {
+            CapturesToolsWrap.Children.Add(CapturesToolsHost);
+            CapturesToolsWrap.Visibility = Visibility.Visible;
+            CapturesToolsHost.Margin = new Thickness(0, 0, 0, 0);
+            CapturesToolsHost.HorizontalAlignment = HorizontalAlignment.Left;
+        }
+        else
+        {
+            CapturesToolsHost.Margin = new Thickness(10, 0, 10, 0);
+            CapturesToolsHost.HorizontalAlignment = HorizontalAlignment.Center;
+            CapturesToolbar.Children.Add(CapturesToolsHost);
+            Grid.SetRow(CapturesToolsHost, 0);
+            Grid.SetColumn(CapturesToolsHost, 1);
+            CapturesToolsWrap.Visibility = Visibility.Collapsed;
+        }
+
+        AnimateCapturesToolsMove();
+    }
+
+    /// <summary>The short slide-and-fade that plays after the search + sort pair has moved
+    /// rows: eight pixels from the direction it came, over 180 ms. Skipped when the user
+    /// has asked Windows to keep animation to a minimum.</summary>
+    private void AnimateCapturesToolsMove()
+    {
+        if (!Motion.Enabled)
+        {
+            CapturesToolsHost.BeginAnimation(OpacityProperty, null);
+            CapturesToolsHost.Opacity = 1;
+            CapturesToolsSlide.BeginAnimation(TranslateTransform.YProperty, null);
+            CapturesToolsSlide.Y = 0;
+            return;
+        }
+
+        var slidingDown = CapturesToolsHost.Parent == CapturesToolsWrap;
+        CapturesToolsSlide.BeginAnimation(TranslateTransform.YProperty, null);
+        CapturesToolsSlide.Y = slidingDown ? -8 : 8;
+        CapturesToolsSlide.BeginAnimation(TranslateTransform.YProperty,
+            new System.Windows.Media.Animation.DoubleAnimation(0, TimeSpan.FromMilliseconds(180))
+            {
+                EasingFunction = new System.Windows.Media.Animation.CubicEase
+                {
+                    EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut,
+                },
+            });
+
+        CapturesToolsHost.BeginAnimation(OpacityProperty, null);
+        CapturesToolsHost.Opacity = 0.35;
+        CapturesToolsHost.BeginAnimation(OpacityProperty,
+            new System.Windows.Media.Animation.DoubleAnimation(1, TimeSpan.FromMilliseconds(180))
+            {
+                EasingFunction = new System.Windows.Media.Animation.CubicEase
+                {
+                    EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut,
+                },
+            });
+    }
+
     private void UpdateCaptureTileWidth()
     {
         // The scroller's own width less a fixed allowance for its scroll bar, rather than the
@@ -306,10 +404,33 @@ public partial class MainWindow
 
     internal static string FormatCaptureTime(DateTime local)
     {
-        var time = local.ToString("t", CultureInfo.CurrentCulture);
-        if (local.Date == DateTime.Today) return $"Today, {time}";
-        if (local.Date == DateTime.Today.AddDays(-1)) return $"Yesterday, {time}";
-        return local.ToString("d MMM yyyy", CultureInfo.CurrentCulture);
+        // Capture the resolved mode at the moment we format - the captures panel re-renders
+        // when the user changes the toggle, so the next render picks up the new mode.
+        var mode = TimestampFormatting.Resolve(
+            _currentUseShamsi, _currentShowGregorian, CultureInfo.CurrentCulture);
+        var time = TimestampFormatting.FormatTime(local);
+        if (mode == TimestampMode.Gregorian)
+        {
+            if (local.Date == DateTime.Today) return $"Today, {time}";
+            if (local.Date == DateTime.Today.AddDays(-1)) return $"Yesterday, {time}";
+            return local.ToString("d MMM yyyy", CultureInfo.CurrentCulture);
+        }
+        // Shamsi: same "Today/Yesterday" idea, but spelled in Persian with the time underneath.
+        var shamsi = TimestampFormatting.FormatDate(local, mode);
+        if (local.Date == DateTime.Today) return $"Today, {shamsi} {time}";
+        if (local.Date == DateTime.Today.AddDays(-1)) return $"Yesterday, {shamsi} {time}";
+        return $"{shamsi} {time}";
+    }
+
+    // The settings reference at the moment of formatting - set on every RefreshCaptures.
+    // Stays null when nothing has set it; the formatter falls back to locale-based default.
+    private static bool? _currentUseShamsi;
+    private static bool _currentShowGregorian;
+
+    internal static void SetTimestampMode(bool? useShamsi, bool showGregorian)
+    {
+        _currentUseShamsi = useShamsi;
+        _currentShowGregorian = showGregorian;
     }
 
     // ------------------------------------------------------------------ actions

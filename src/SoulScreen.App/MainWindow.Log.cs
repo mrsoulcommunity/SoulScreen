@@ -1,8 +1,11 @@
+using System.Globalization;
 using System.IO;
 using System.Text;
 using System.Windows;
 using Microsoft.Win32;
+using SoulScreen.App.Logic;
 using SoulScreen.Core.Logging;
+using SoulScreen.Core.Time;
 
 namespace SoulScreen.App;
 
@@ -58,7 +61,7 @@ public partial class MainWindow
         var dialog = new SaveFileDialog
         {
             Title = "Save the activity log",
-            FileName = $"soulscreen-log-{DateTime.Now:yyyyMMdd-HHmmss}.txt",
+            FileName = $"soulscreen-log-{CaptureTimestampFormatter.BuildStem(DateTime.Now, useShamsi: false)}.txt",
             Filter = "Text files (*.txt)|*.txt|All files (*.*)|*.*",
             DefaultExt = ".txt",
         };

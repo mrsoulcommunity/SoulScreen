@@ -39,6 +39,39 @@ public enum VideoFit
 }
 
 /// <summary>
+/// Where the floating picture controls (record, screenshot, sound, pause) live. Each mode
+/// answers a different way of working: <see cref="Floating"/> for the default over-picture
+/// experience, <see cref="Corner"/> for an out-of-the-way parked bar, <see cref="Free"/> for
+/// the bar the user has dragged to where they want it, and <see cref="Docked"/> for a bar
+/// that lives with the rest of the window's chrome and is never hidden.
+/// </summary>
+public enum ControlBarPlacement
+{
+    /// <summary>Floats centred over the foot of the picture, fading away until the pointer moves.</summary>
+    Floating,
+    /// <summary>Parks in one of the picture's corners (chosen by <see cref="ControlBarCorner"/>),
+    /// still fading when the pointer is still.</summary>
+    Corner,
+    /// <summary>Stays wherever the user dragged it, snapping to the nearest corner at rest so
+    /// it lines up with the picture's edge.</summary>
+    Free,
+    /// <summary>Sits in the top caption strip beside the window controls, never fading. The
+    /// picture fills the area underneath.</summary>
+    Docked,
+}
+
+/// <summary>One of the four picture corners, or the centred position over its foot.</summary>
+public enum ControlBarCorner
+{
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight,
+    /// <summary>The original placement: centred over the foot of the picture.</summary>
+    BottomCentre,
+}
+
+/// <summary>
 /// The trade between smoothness and delay. Each level sets how much decoded picture and
 /// sound is held back before it is shown, which is what hides Wi-Fi's unevenness.
 /// </summary>
@@ -61,6 +94,49 @@ public sealed class RecentDevice
     public int SessionCount { get; set; }
     /// <summary>Total time spent mirroring, across every session.</summary>
     public double TotalSeconds { get; set; }
+
+    // ---------------------------------------------------- per-device profile
+
+    /// <summary>This phone's own accent colour, independent of every other phone's.</summary>
+    public AccentColor Accent { get; set; } = AccentColor.Blue;
+
+    /// <summary>This phone's own picture mapping: fit, fill, stretch or actual size.</summary>
+    public VideoFit VideoFit { get; set; } = VideoFit.Fit;
+
+    /// <summary>This phone's own rotation: 0, 90, 180 or 270.</summary>
+    public int Rotation { get; set; }
+
+    public bool MirrorHorizontally { get; set; }
+
+    /// <summary>Start recording as soon as this phone connects, regardless of the
+    /// general "record on connect" setting.</summary>
+    public bool AutoRecord { get; set; }
+}
+
+/// <summary>The first day of the week, used by any calendar widget.</summary>
+public enum FirstDayOfWeek
+{
+    Saturday,
+    Sunday,
+    Monday,
+}
+
+/// <summary>
+/// Locale-aware timestamp formatting. Lives in settings so the gallery, summary and log
+/// all switch at once.
+/// </summary>
+public sealed class TimestampSettings
+{
+    /// <summary>
+    /// When non-null, overrides the locale-based default. <c>null</c> means "follow the
+    /// system culture" (Shamsi when the UI culture is Persian).
+    /// </summary>
+    public bool? UseShamsi { get; set; }
+
+    /// <summary>When Shamsi is on, also show the Gregorian in parentheses.</summary>
+    public bool ShowGregorianAlongside { get; set; }
+
+    public FirstDayOfWeek FirstDay { get; set; } = FirstDayOfWeek.Saturday;
 }
 
 /// <summary>
@@ -281,9 +357,65 @@ public sealed class AppSettings
     public double? MiniPlayerLeft { get; set; }
     public double? MiniPlayerTop { get; set; }
 
+    // -------------------------------------------------------- picture controls
+
+    /// <summary>
+    /// Where the floating picture controls sit. <see cref="ControlBarPlacement.Floating"/> keeps
+    /// the original behaviour - the bar in the lower centre of the picture, fading away until the
+    /// pointer moves. <see cref="ControlBarPlacement.Corner"/> parks it in one of the four
+    /// corners (chosen by <see cref="ControlBarCorner"/>), still auto-hiding. <see cref="ControlBarPlacement.Free"/>
+    /// remembers the dragged-to position and snaps to whichever corner it ends nearest, so a
+    /// bar pulled into the corner is also a parked one. <see cref="ControlBarPlacement.Docked"/>
+    /// tucks the bar into the top caption strip next to the window controls, where it sits
+    /// beside the rest of the chrome and never fades out.
+    /// </summary>
+    public ControlBarPlacement ControlBarPlacement { get; set; } = ControlBarPlacement.Floating;
+
+    /// <summary>Which corner the floating picture controls dock to, in <see cref="ControlBarPlacement.Corner"/>
+    /// and as the snap target in <see cref="ControlBarPlacement.Free"/>.</summary>
+    public ControlBarCorner ControlBarCorner { get; set; } = ControlBarCorner.BottomCentre;
+
+    /// <summary>The bar's last dragged position in <see cref="ControlBarPlacement.Free"/>, as
+    /// fractions of the picture's width and height (0..1). Saved so the bar returns to the same
+    /// spot after a relaunch.</summary>
+    public double? ControlBarFreeX { get; set; }
+    public double? ControlBarFreeY { get; set; }
+
+    /// <summary>When true, the floating bar shows only icons (no shortcut labels, tighter
+    /// spacing) for users who already know the shortcuts and want the bar to take less room.</summary>
+    public bool CompactControlBar { get; set; }
+
+    /// <summary>True the very first time the floating bar is shown after install - the
+    /// drag-me hint pulses briefly, then this flips off so it never appears again.</summary>
+    public bool HasSeenBarHint { get; set; }
+
     // -------------------------------------------------------------------- history
 
     public List<RecentDevice> RecentDevices { get; set; } = [];
+
+    // ----------------------------------------------------------------- timestamps
+
+    /// <summary>
+    /// How timestamps appear across the app: gallery subtitles, session summary, activity
+    /// log, and capture filenames. Persisted as a single object so future fields can be
+    /// added without breaking existing settings files.
+    /// </summary>
+    public TimestampSettings Timestamps { get; set; } = new();
+
+    // ------------------------------------------------------------------- updates
+
+    /// <summary>Looks for a newer release on GitHub when SoulScreen starts, and again every
+    /// few hours while it runs. The check itself is silent; nothing downloads or installs
+    /// without "Install and restart" in Settings.</summary>
+    public bool CheckForUpdatesAutomatically { get; set; } = true;
+
+    /// <summary>The release tag "Skip this version" was pressed for, so it is not raised
+    /// again. Compared as text, not as a parsed version.</summary>
+    public string? SkippedUpdateVersion { get; set; }
+
+    /// <summary>When the last quiet background check ran, so the interval between checks is
+    /// honoured across restarts rather than resetting every time SoulScreen opens.</summary>
+    public DateTime? LastUpdateCheckUtc { get; set; }
 
     // ------------------------------------------------------------------ lifecycle
 
@@ -353,6 +485,14 @@ public sealed class AppSettings
         if (!Enum.IsDefined(Accent)) Accent = AccentColor.Blue;
         if (!Enum.IsDefined(ScreenshotFormat)) ScreenshotFormat = ScreenshotFormat.Png;
         if (!Enum.IsDefined(Animations)) Animations = MotionPreference.FollowWindows;
+        if (!Enum.IsDefined(ControlBarPlacement)) ControlBarPlacement = ControlBarPlacement.Floating;
+        if (!Enum.IsDefined(ControlBarCorner)) ControlBarCorner = ControlBarCorner.BottomCentre;
+
+        // The free-position fractions are 0..1 against the picture's edges; anything else was
+        // typed by hand into a settings file, or corrupted on the way in, and would place the
+        // bar off-screen.
+        if (ControlBarFreeX is < 0.0 or > 1.0 or double.NaN) ControlBarFreeX = null;
+        if (ControlBarFreeY is < 0.0 or > 1.0 or double.NaN) ControlBarFreeY = null;
 
         // A hand-edited budget can hold anything; negative and absurdly small values mean
         // "off" rather than "prune every capture the moment it is taken".
@@ -398,6 +538,10 @@ public sealed class AppSettings
         RecentDevices.RemoveAll(d => d is null || string.IsNullOrWhiteSpace(d.Name));
         if (RecentDevices.Count > MaxRecentDevices)
             RecentDevices = RecentDevices.OrderByDescending(d => d.LastSeenUtc).Take(MaxRecentDevices).ToList();
+
+        // Timestamps is a complex object; null-safe + clamp the enum.
+        Timestamps ??= new TimestampSettings();
+        if (!Enum.IsDefined(Timestamps.FirstDay)) Timestamps.FirstDay = FirstDayOfWeek.Saturday;
     }
 
     /// <summary>Folds any angle onto one of the four the picture can be shown at.</summary>

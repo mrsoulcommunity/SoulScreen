@@ -1,4 +1,6 @@
+using System;
 using System.Buffers;
+using System.Diagnostics;
 
 namespace SoulScreen.Media;
 
@@ -22,6 +24,9 @@ public sealed class DecodedVideoFrame : IDisposable
         Height = height;
         Stride = stride;
         TimestampUs = timestampUs;
+        // A Stopwatch reading, so the latency measure on the render hot path is a
+        // tick subtraction instead of a DateTime.UtcNow call every frame.
+        DecodedAtTicks = Stopwatch.GetTimestamp();
     }
 
     public int Width { get; }
@@ -33,8 +38,15 @@ public sealed class DecodedVideoFrame : IDisposable
     /// <summary>Presentation timestamp in microseconds on the sender's clock.</summary>
     public long TimestampUs { get; }
 
-    /// <summary>When the frame finished decoding, used to measure end-to-end latency.</summary>
+    /// <summary>When the frame finished decoding, as wall-clock time. Kept for logs and
+    /// diagnostics; the render path measures latency from <see cref="DecodedAtTicks"/>,
+    /// which is a far cheaper clock to read on every frame.</summary>
     public DateTime DecodedAtUtc { get; } = DateTime.UtcNow;
+
+    /// <summary>The matching <see cref="Stopwatch.GetTimestamp"/> reading. Used by the
+    /// presentation hot path to compute end-to-end latency without paying for a
+    /// <see cref="DateTime.UtcNow"/> syscall on every composition pass.</summary>
+    public long DecodedAtTicks { get; }
 
     public ReadOnlySpan<byte> Pixels => _pixels is null
         ? throw new ObjectDisposedException(nameof(DecodedVideoFrame))

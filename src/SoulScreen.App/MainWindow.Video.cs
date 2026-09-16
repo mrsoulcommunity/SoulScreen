@@ -8,6 +8,7 @@ using System.Windows.Media;
 using System.Windows.Media.Animation;
 using System.Windows.Media.Imaging;
 using SoulScreen.App.Logic;
+using SoulScreen.Core.Time;
 using SoulScreen.Media;
 
 namespace SoulScreen.App;
@@ -30,6 +31,9 @@ public partial class MainWindow
 
     /// <summary>Armed while a timed stop is counting down; null when none is.</summary>
     private RecordingTimer? _recordingTimer;
+
+    /// <summary>Armed while a recording is waiting to start automatically; null when none is.</summary>
+    private RecordingSchedule? _recordingSchedule;
 
     private void InitialiseVideo()
     {
@@ -82,13 +86,14 @@ public partial class MainWindow
         ApplyPictureSettings();
         SyncPictureControls();
         ResetMarkupForNewPicture();
+        SaveActiveDeviceProfile();
         ShowToast(fit switch
         {
             VideoFit.Fill => "Fill the window",
             VideoFit.Stretch => "Stretch to the window",
             VideoFit.Actual => "Actual size",
             _ => "Fit to the window",
-        }, "");
+        }, "");
     }
 
     private void SetRotation(int degrees)
@@ -100,6 +105,7 @@ public partial class MainWindow
         ApplyPictureSettings();
         SyncPictureControls();
         ResetMarkupForNewPicture();
+        SaveActiveDeviceProfile();
         // The window was shaped for the other orientation; let it be reshaped once.
         _adjustedForVideoSize = false;
         if (Video.VideoSize.Width > 0) OnVideoSizeChanged(this, Video.VideoSize);
@@ -115,6 +121,7 @@ public partial class MainWindow
         ApplyPictureSettings();
         SyncPictureControls();
         ResetMarkupForNewPicture();
+        SaveActiveDeviceProfile();
     }
 
     /// <summary>The picture's size as shown, with rotation applied.</summary>
@@ -417,6 +424,10 @@ public partial class MainWindow
         // The timed stop only means something while a recording is running.
         MenuTimedStop.Visibility = RecordButton.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
         if (MenuCancelTimedStop is not null) MenuCancelTimedStop.IsEnabled = _recordingTimer is { IsArmed: true };
+        // A scheduled start only means something before a recording has begun.
+        MenuScheduleRecording.Visibility = RecordButton.IsEnabled && RecordButton.IsChecked != true
+            ? Visibility.Visible : Visibility.Collapsed;
+        if (MenuCancelScheduledRecording is not null) MenuCancelScheduledRecording.IsEnabled = _recordingSchedule is not null;
         MenuMute.IsEnabled = _audio is not null;
         MenuMute.IsChecked = MuteButton.IsChecked == true;
         MenuStats.IsChecked = StatsHud.Visibility == Visibility.Visible;
@@ -505,7 +516,10 @@ public partial class MainWindow
             }
 
             _diskLowWarned = false;
-            var path = CaptureNaming.NewPath(_settings.CaptureDirectory, DateTime.Now, ".mp4");
+            var path = CaptureTimestampFormatter.NewPath(
+                _settings.CaptureDirectory, DateTime.Now, ".mp4",
+                _settings.Timestamps, CultureInfo.CurrentCulture,
+                deviceName: _sessionDevice?.Name ?? "");
             _pipeline.RecordAudio = _settings.RecordAudio && _audio is not null;
             _pipeline.StartRecording(path);
             // Any timed stop belonged to the recording that has just ended.
@@ -558,6 +572,74 @@ public partial class MainWindow
         timer.Disarm();
         _recordingTimer = null;
         ShowToast("The timed stop was cancelled", "\uE711");
+        UpdateRecordingPill();
+    }
+
+    // ------------------------------------------------------ scheduled recording
+
+    /// <summary>"Start recording in fifteen minutes" from the context menu or the palette:
+    /// arms an automatic start. Arming again replaces the previous schedule rather than
+    /// stacking with it - the last choice is what was meant.</summary>
+    private void OnMenuScheduleRecording(object sender, RoutedEventArgs e)
+    {
+        var minutes = sender is FrameworkElement { Tag: string tag }
+            && int.TryParse(tag, NumberStyles.Integer, CultureInfo.InvariantCulture, out var parsed)
+            && parsed > 0 ? parsed : 5;
+        ArmScheduledRecording(TimeSpan.FromMinutes(minutes));
+    }
+
+    /// <summary>Arms an automatic start <paramref name="delay"/> from now, running for
+    /// <paramref name="duration"/> once it begins - zero or less means no automatic stop.</summary>
+    private void ArmScheduledRecording(TimeSpan delay, TimeSpan duration = default)
+    {
+        if (RecordButton.IsChecked == true)
+        {
+            ShowToast("Already recording", "");
+            return;
+        }
+        if (!RecordButton.IsEnabled)
+        {
+            ShowToast("Nothing to record yet - connect an iPhone first", "");
+            return;
+        }
+
+        _recordingSchedule = RecordingSchedule.Compute(delay, duration, DateTime.UtcNow);
+        var when = delay <= TimeSpan.Zero ? "now" : $"in {FormatDuration(delay)}";
+        ShowToast($"Recording starts {when}", "\uEB52");
+        UpdateTaskbar();
+    }
+
+    /// <summary>Cancels an armed scheduled start; nothing has begun to undo.</summary>
+    private void OnMenuCancelScheduledRecording(object sender, RoutedEventArgs e)
+    {
+        if (_recordingSchedule is null) return;
+        _recordingSchedule = null;
+        ShowToast("The scheduled recording was cancelled", "\uE711");
+    }
+
+    /// <summary>The metrics tick's scheduled-start duty. A session must actually be on
+    /// screen to record into - a schedule that fires with nothing connected is announced
+    /// and dropped rather than left armed for whatever connects next, which nobody asked for.</summary>
+    private void CheckRecordingSchedule()
+    {
+        if (_recordingSchedule is not { } schedule || !schedule.IsDue(DateTime.UtcNow)) return;
+        _recordingSchedule = null;
+
+        if (RecordButton.IsChecked == true) return; // already recording, by hand or by another path
+        if (!RecordButton.IsEnabled)
+        {
+            ShowToast("The scheduled recording could not start - nothing is connected", "\uE7BA");
+            UpdateRecordingPill();
+            return;
+        }
+
+        RecordButton.IsChecked = true; // OnRecordChanged does the rest
+        if (schedule.Duration is { } duration)
+        {
+            _recordingTimer ??= new RecordingTimer();
+            _recordingTimer.Arm(duration, DateTime.UtcNow);
+        }
+        ShowToast("Scheduled recording started", "\uE9A9");
         UpdateRecordingPill();
     }
 
@@ -658,7 +740,7 @@ public partial class MainWindow
     private void OnMuteChanged(object sender, RoutedEventArgs e)
     {
         var muted = MuteButton.IsChecked == true;
-        MuteButton.Content = muted ? "" : "";
+        MuteButton.Content = muted ? "\uE74F" : "\uE767";
         MuteButton.ToolTip = muted ? "Unmute the phone's audio (Ctrl+M)" : "Mute the phone's audio (Ctrl+M)";
         ApplyAudioMute();
         // Muted reads as zero on the level, not as the level being forgotten.
@@ -763,7 +845,10 @@ public partial class MainWindow
         {
             Directory.CreateDirectory(_settings.CaptureDirectory);
             var jpeg = _settings.ScreenshotFormat == ScreenshotFormat.Jpeg;
-            var path = CaptureNaming.NewPath(_settings.CaptureDirectory, DateTime.Now, jpeg ? ".jpg" : ".png");
+            var path = CaptureTimestampFormatter.NewPath(
+                _settings.CaptureDirectory, DateTime.Now, jpeg ? ".jpg" : ".png",
+                _settings.Timestamps, CultureInfo.CurrentCulture,
+                deviceName: _sessionDevice?.Name ?? "");
 
             BitmapEncoder encoder = jpeg ? new JpegBitmapEncoder { QualityLevel = 92 } : new PngBitmapEncoder();
             // JPEG has no fourth channel to carry, and the encoder is given exactly what it takes.

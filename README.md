@@ -9,7 +9,7 @@
 [![Release](https://img.shields.io/github/v/release/mrsoulcommunity/SoulScreen?label=release&color=0e0f13)](https://github.com/mrsoulcommunity/SoulScreen/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%2011%20x64-0e0f13)](#requirements)
 [![.NET](https://img.shields.io/badge/.NET-8.0-512BD4)](#building-from-source)
-[![Tests](https://img.shields.io/badge/tests-240%20passing-2ea043)](#testing)
+[![Tests](https://img.shields.io/badge/tests-406%20passing-2ea043)](#testing)
 
 </div>
 
@@ -68,6 +68,7 @@ phone's screen at 498x1080 / 59.9 fps.
 | Shortcuts from any app, taskbar thumbnail buttons | working |
 | Notification-area icon, launch at sign-in | working |
 | Demo pattern, for trying the app with no phone | working |
+| Auto-update from GitHub releases, with checksum verification | working |
 | USB transport | deferred; see [src/SoulScreen.Usb/UsbTransport.cs](src/SoulScreen.Usb/UsbTransport.cs) |
 
 ---
@@ -325,6 +326,101 @@ Worth knowing about:
   history and the trust decisions stay this machine's own.
 - **Performance graph** draws the last minute of frame pace and buffering under the
   statistics overlay, so a stutter can be told from a spike at a glance.
+- **Updates** checks GitHub for a newer release on startup and every few hours - silently,
+  and only ever reading the public release feed. A release worth having shows a toast and a
+  card under Settings → Updates with **Download and install**: SoulScreen fetches the
+  Windows build, checks it against the checksum GitHub published for it, and hands off to a
+  small script that waits for the app to close, mirrors the new build over the install
+  folder the same way `RUN.bat` does, and starts it again. Nothing downloads without that
+  button being pressed, and turning off "Check for updates automatically" only stops the
+  quiet background check - **Check now**, in the same card, always works. A release can be
+  skipped for good with **Skip this version**. Self-updating needs SoulScreen to be a
+  published copy (not `dotnet run` from source) in a folder it can write to; where it is not,
+  the card offers **Open the release page** instead.
+
+### Regional
+
+Persian (Shamsi) dates are supported everywhere a timestamp appears:
+
+- **Settings → Regional → Timestamps.** Toggle *Use Persian (Shamsi) dates*, *Show
+  Gregorian next to Shamsi*, and the *First day of week* (Saturday, Sunday, Monday). The
+  preview row at the bottom shows what the format looks like today.
+- **Locale auto-detection.** When the toggle is left at the default, SoulScreen follows
+  the system UI culture: a Persian-language Windows turns Shamsi on, English stays
+  Gregorian. The explicit setting always wins over the locale.
+- **Affected surfaces.** Gallery tile subtitles, the session summary card, the connection
+  report (Doctor → Copy), the activity-log save filename, and every capture filename —
+  screenshots, recordings, clips — carry the configured calendar. Shamsi filenames carry
+  a `SH` marker so the parser knows which calendar to use; the existing collision-suffix
+  handling (a second capture in the same second gets `-2`, `-3`, …) is preserved.
+- **Default behaviour unchanged.** A user who never touches the toggle sees identical
+  filenames and labels to the previous build.
+
+The CI step `scripts/check-timestamp-literals.ps1` blocks new ad-hoc date-formatting
+sites (e.g. `ToString("yyyy…")` or `DateTime.Now.ToString(`) outside the formatter
+itself, so the next capture-filename addition routes through the same helper.
+
+### Multi-device mirroring
+
+SoulScreen can mirror 2, 3, or 4 iPhones simultaneously in a configurable grid:
+
+| Tile count | Layout | Notes |
+|---|---|---|
+| 1 | Full-screen | Same as before — zero regression |
+| 2 | 1×2 or 2×1 | Depends on window aspect ratio |
+| 3 | Presenter | Large tile (2/3 width) + 2 stacked small tiles |
+| 4 | 2×2 | Equal-sized tiles |
+
+**Keyboard shortcuts:**
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl+1..4` | Focus tile N to full window |
+| `Ctrl+Shift+S` | Screenshot of focused tile |
+| `Ctrl+Shift+R` | Record focused tile |
+| `Ctrl+M` | Mute focused tile |
+| `Space` | Pause focused tile |
+| `Esc` / `Ctrl+H` | Return to grid from focus mode |
+| Double-click tile | Focus tile to full window |
+
+**Per-tile controls** (hover toolbar): Screenshot, Record, Mute, Swap to full. Each tile can
+route its audio to a different Windows output device (dropdown in toolbar). The global
+*Output device* in Settings remains the default for all tiles.
+
+**Recording.** `Ctrl+R` records all tiles simultaneously; `Ctrl+R` again stops all. Each tile
+produces its own MP4 in `Pictures\SoulScreen`, named with the device name and a Shamsi or
+Gregorian timestamp (depending on the locale setting).
+
+**Per-tile approval.** The *Ask before mirroring* toggle and the Allowed / Blocked phone
+lists apply per tile. A blocked phone shows a "Blocked" tile with no video pixels.
+
+**Mini player in grid mode.** `Ctrl+Shift+M` shrinks the window while keeping the grid.
+A setting controls whether the mini player shows the focused tile only or the full grid
+(default: keep grid).
+
+**Session summary.** When all sessions end, the toast shows an aggregate:
+`"Mirrored 3 of 4 tiles for 47 m 12 s; one tile dropped at 14:32 (network); 2 screenshots, 1 recording"`.
+
+**Architecture.** One mDNS advertisement (one entry in Screen Mirroring) with one RTSP
+server port. Each iPhone TCP connection gets its own `AirPlaySession` with its own pairing,
+FairPlay, H.264 decoder, audio output, and recording pipeline. Sessions are fully isolated —
+a crash on one tile does not affect the others. The `MultiSourceRouter` (`SoulScreen.Core`)
+aggregates all sessions behind the same `IMirrorSource` interface, so the existing UI and
+recording pipeline require no changes.
+
+**Performance budget (4 tiles @ 60 fps):**
+
+| Resource | Per tile | 4 tiles |
+|---|---|---|
+| RAM | ~44 MB | ~176 MB |
+| CPU | — | ~70% on mid-range i5 + Intel UHD |
+
+Profile with `Ctrl+I` (performance graph). Target: ≥ 55 fps per tile on the reference
+hardware (iPhone 17 Pro / iOS 26, Windows 11, i5-12400 + UHD 730).
+
+**Manual test checklist:** `artifacts/testbuild/multi-device-manual-checklist.md`
+
+**Design doc:** `docs/multi-device.md`
 
 ### Smoothness, and the delay it costs
 

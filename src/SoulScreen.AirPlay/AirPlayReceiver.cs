@@ -134,6 +134,18 @@ public sealed class AirPlayReceiver : IMirrorSource
     /// <summary>When the session now streaming began, or null while nothing is.</summary>
     public DateTime? SessionStartedAtUtc => _handler.ActiveSession?.StartedAtUtc;
 
+    /// <summary>Most recent measured round-trip to the phone, in milliseconds, or null before
+    /// the timing channel has synchronised. Feeds the predictive connection-quality warning;
+    /// not used for playback, which never schedules against the sender's clock.</summary>
+    public double? RoundTripMilliseconds
+    {
+        get
+        {
+            var timing = _handler.ActiveSession?.Timing;
+            return timing is { IsSynchronised: true } ? timing.RoundTripMicroseconds / 1000.0 : null;
+        }
+    }
+
     private void SetState(MirrorSourceState state, SourceDeviceInfo? device = null, string? message = null)
     {
         if (device is not null) Device = device;

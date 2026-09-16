@@ -75,6 +75,7 @@
     <SolidColorBrush x:Key="NavIndigo" Color="#FF5E5CE6" />
     <SolidColorBrush x:Key="NavGraphite" Color="#FF8E8E93" />
     <SolidColorBrush x:Key="NavTeal" Color="#FF30B0C7" />
+    <SolidColorBrush x:Key="NavCyan" Color="#FF32ADE6" />
     <SolidColorBrush x:Key="NavGray" Color="#FF636366" />
     <LinearGradientBrush x:Key="RecordingTile" StartPoint="0,0" EndPoint="1,1">
         <GradientStop Color="#FF2C2C33" Offset="0" />
@@ -1361,13 +1362,14 @@
         </Setter>
     </Style>
 
-    <!-- An icon button on a dark surface over the picture: the markup bar, the viewer. -->
+    <!-- An icon button on a dark surface over the picture: the control bar, the markup bar, the
+         viewer. Quiet by default - it is only a glyph until hovered. -->
     <Style x:Key="HudButton" TargetType="Button">
-        <Setter Property="Width" Value="30" />
-        <Setter Property="Height" Value="30" />
+        <Setter Property="Width" Value="28" />
+        <Setter Property="Height" Value="28" />
         <Setter Property="Foreground" Value="{StaticResource HudText}" />
         <Setter Property="FontFamily" Value="{StaticResource IconFont}" />
-        <Setter Property="FontSize" Value="14" />
+        <Setter Property="FontSize" Value="13" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="FocusVisualStyle" Value="{StaticResource HudFocusVisual}" />
         <Setter Property="Template">
@@ -1395,11 +1397,11 @@
 
     <!-- The same, staying lit while what it opens is open. -->
     <Style x:Key="HudToggle" TargetType="ToggleButton">
-        <Setter Property="Width" Value="30" />
-        <Setter Property="Height" Value="30" />
+        <Setter Property="Width" Value="28" />
+        <Setter Property="Height" Value="28" />
         <Setter Property="Foreground" Value="{StaticResource HudText}" />
         <Setter Property="FontFamily" Value="{StaticResource IconFont}" />
-        <Setter Property="FontSize" Value="14" />
+        <Setter Property="FontSize" Value="13" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="FocusVisualStyle" Value="{StaticResource HudFocusVisual}" />
         <Setter Property="Template">
@@ -1423,11 +1425,11 @@
 
     <!-- One tool of several, of which the chosen one is lit: pen, highlighter, laser, eraser. -->
     <Style x:Key="HudTool" TargetType="RadioButton">
-        <Setter Property="Width" Value="30" />
-        <Setter Property="Height" Value="30" />
+        <Setter Property="Width" Value="28" />
+        <Setter Property="Height" Value="28" />
         <Setter Property="Foreground" Value="{StaticResource HudText}" />
         <Setter Property="FontFamily" Value="{StaticResource IconFont}" />
-        <Setter Property="FontSize" Value="14.5" />
+        <Setter Property="FontSize" Value="13.5" />
         <Setter Property="Cursor" Value="Hand" />
         <Setter Property="FocusVisualStyle" Value="{StaticResource HudFocusVisual}" />
         <Setter Property="Template">
@@ -1603,6 +1605,18 @@
 
     <!-- ============================== control bar ============================== -->
 
+    <!-- A keyboard shortcut label that sits under each button on the floating control bar.
+         Tiny, monospaced, and dimmed so it teaches the shortcut without competing with
+         the icon above it. -->
+    <Style x:Key="ControlBarShortcut" TargetType="TextBlock">
+        <Setter Property="FontFamily" Value="{StaticResource MonoFont}" />
+        <Setter Property="FontSize" Value="9" />
+        <Setter Property="Foreground" Value="{StaticResource HudTextDim}" />
+        <Setter Property="HorizontalAlignment" Value="Center" />
+        <Setter Property="Margin" Value="0,1,0,0" />
+        <Setter Property="TextAlignment" Value="Center" />
+    </Style>
+
     <!-- A toggle on the control bar whose state is told by its glyph - mute - so it does not
          also light up the way markup does. -->
     <Style x:Key="HudPlainToggle" TargetType="ToggleButton" BasedOn="{StaticResource HudToggle}">
@@ -1631,8 +1645,8 @@
     <!-- The volume on the control bar: white on the dark bar, as QuickTime draws it, whatever
          the theme and accent - the bar itself is not themed. -->
     <Style x:Key="HudVolumeSlider" TargetType="Slider">
-        <Setter Property="Width" Value="76" />
-        <Setter Property="Height" Value="30" />
+        <Setter Property="Width" Value="64" />
+        <Setter Property="Height" Value="26" />
         <Setter Property="VerticalAlignment" Value="Center" />
         <Setter Property="Margin" Value="2,0,6,0" />
         <Setter Property="SmallChange" Value="0.05" />
@@ -1665,7 +1679,7 @@
                             </RepeatButton>
                         </Track.IncreaseRepeatButton>
                         <Track.Thumb>
-                            <Thumb Width="13" Height="13" Focusable="False">
+                            <Thumb Width="11" Height="11" Focusable="False">
                                 <Thumb.Template>
                                     <ControlTemplate TargetType="Thumb">
                                         <Ellipse Fill="White">

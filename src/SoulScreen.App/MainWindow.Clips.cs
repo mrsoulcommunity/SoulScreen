@@ -1,10 +1,12 @@
 using System.Collections.Specialized;
+using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Input;
 using System.Windows.Media.Imaging;
 using System.Windows.Threading;
 using SoulScreen.App.Logic;
+using SoulScreen.Core.Time;
 using SoulScreen.Media;
 
 namespace SoulScreen.App;
@@ -24,6 +26,18 @@ public partial class MainWindow
 {
     /// <summary>The export in flight, or null. Its token is what stops it.</summary>
     private CancellationTokenSource? _clipExport;
+
+    /// <summary>The clip length the panel opens with, before the in/out points are touched.</summary>
+    private static readonly TimeSpan DefaultClipLength = TimeSpan.FromSeconds(5);
+
+    /// <summary>Set while an in/out slider is pushing the other one out of its way, so that
+    /// cross-clamp does not recurse into itself.</summary>
+    private bool _updatingClipRange;
+
+    /// <summary>Whether this FFmpeg build can write the chosen format at all - independent of
+    /// whether the in/out selection is itself valid, since the two disable the Save button
+    /// for different reasons and each deserves its own words.</summary>
+    private bool _clipFormatAvailable;
 
     private bool IsClipPanelOpen => ViewerClipPanel.Visibility == Visibility.Visible;
 
@@ -55,8 +69,18 @@ public partial class MainWindow
         ViewerClipGif.IsChecked = wanted == ClipFormat.Gif;
         ViewerClipWebM.IsChecked = wanted == ClipFormat.WebM;
 
-        if (!gif && !webM) ShowClipError("This PC's FFmpeg build cannot write an animation. See the activity log.");
-        ViewerClipSave.IsEnabled = gif || webM;
+        _clipFormatAvailable = gif || webM;
+        if (!_clipFormatAvailable) ShowClipError("This PC's FFmpeg build cannot write an animation. See the activity log.");
+
+        // The bounds a clip can be cut from: the whole recording, when its length is known
+        // yet - an unknown one still lets the in/out points move, just without an upper limit.
+        var totalDuration = ClipTotalDuration();
+        var maxSeconds = totalDuration?.TotalSeconds ?? Math.Max(ViewerMedia.Position.TotalSeconds + ClipExporter.MaximumLength.TotalSeconds, 30);
+        ViewerClipIn.Maximum = maxSeconds;
+        ViewerClipOut.Maximum = maxSeconds;
+
+        var (start, end) = ClipRange.DefaultRange(ViewerMedia.Position, totalDuration, DefaultClipLength);
+        SetClipRange(start, end);
 
         UpdateViewerClipSummary();
         Dispatcher.BeginInvoke(() =>
@@ -87,44 +111,92 @@ public partial class MainWindow
         CloseClipPanel();
     }
 
-    /// <summary>Length and format both change what the panel says about the moment.</summary>
+    /// <summary>Format changing changes what the panel says about the moment.</summary>
     private void OnViewerClipChanged(object sender, RoutedEventArgs e)
     {
         // Runs while the XAML is being read too, before the rest of the panel exists.
-        if (ViewerClipLengthText is null || ViewerClipFrom is null) return;
+        if (ViewerClipLengthText is null) return;
         if (IsClipPanelOpen) UpdateViewerClipSummary();
+    }
+
+    /// <summary>
+    /// One in/out slider moved. Each is kept from crossing the other - dragging "in" past
+    /// "out" pushes "out" along with it, rather than letting the range invert - so the pair
+    /// can never describe a clip that runs backwards while it is only half-adjusted.
+    /// </summary>
+    private void OnViewerClipRangeChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        if (_updatingClipRange || ViewerClipLengthText is null) return;
+        _updatingClipRange = true;
+        try
+        {
+            const double minGap = 0.1;
+            if (ReferenceEquals(sender, ViewerClipIn) && ViewerClipIn.Value > ViewerClipOut.Value - minGap)
+                ViewerClipOut.Value = Math.Min(ViewerClipIn.Value + minGap, ViewerClipOut.Maximum);
+            else if (ReferenceEquals(sender, ViewerClipOut) && ViewerClipOut.Value < ViewerClipIn.Value + minGap)
+                ViewerClipIn.Value = Math.Max(ViewerClipOut.Value - minGap, 0);
+        }
+        finally
+        {
+            _updatingClipRange = false;
+        }
+
+        if (IsClipPanelOpen) UpdateViewerClipSummary();
+    }
+
+    private void SetClipRange(TimeSpan start, TimeSpan end)
+    {
+        _updatingClipRange = true;
+        try
+        {
+            ViewerClipIn.Value = Math.Max(start.TotalSeconds, 0);
+            ViewerClipOut.Value = Math.Max(end.TotalSeconds, ViewerClipIn.Value + 0.1);
+        }
+        finally
+        {
+            _updatingClipRange = false;
+        }
     }
 
     private void UpdateViewerClipSummary()
     {
-        var length = ClipLength();
-        ViewerClipLengthText.Text = $"{length.TotalSeconds:0} s";
+        ViewerClipInText.Text = FormatClock(ClipStart());
+        ViewerClipOutText.Text = FormatClock(ClipEnd());
 
-        var start = ViewerMedia.Position;
-        ViewerClipFrom.Text = ViewerMedia.NaturalDuration.HasTimeSpan && start + length > ViewerMedia.NaturalDuration.TimeSpan
-            ? $"From {FormatClock(start)}, where the player is, to the end of the recording."
-            : $"From {FormatClock(start)}, where the player is, and running {FormatDuration(length)}.";
+        var range = CurrentClipRange();
+        if (!range.IsValid)
+        {
+            ViewerClipLengthText.Text = range.Error;
+            ViewerClipSave.IsEnabled = false;
+            return;
+        }
+
+        ViewerClipLengthText.Text = $"{range.Duration.TotalSeconds:0.#} s · {FormatClock(range.Start)} to {FormatClock(range.Start + range.Duration)}";
+        ViewerClipSave.IsEnabled = _clipFormatAvailable;
     }
 
-    private TimeSpan ClipLength() => TimeSpan.FromSeconds(Math.Round(ViewerClipLength?.Value ?? 5));
+    private TimeSpan ClipStart() => TimeSpan.FromSeconds(Math.Max(ViewerClipIn.Value, 0));
 
-    /// <summary>
-    /// Where a clip begins: the player's position, pulled back off the end of the recording
-    /// so that a moment chosen near the end is still the length that was asked for.
-    /// </summary>
-    private TimeSpan ClipStart()
-    {
-        var start = ViewerMedia.Position < TimeSpan.Zero ? TimeSpan.Zero : ViewerMedia.Position;
-        if (!ViewerMedia.NaturalDuration.HasTimeSpan) return start;
+    private TimeSpan ClipEnd() => TimeSpan.FromSeconds(Math.Max(ViewerClipOut.Value, 0));
 
-        var total = ViewerMedia.NaturalDuration.TimeSpan;
-        var length = ClipLength();
-        return total > length && start + length > total ? total - length : start;
-    }
+    /// <summary>The recording's own length, once the player has reported it - null before
+    /// then, which is when the in/out bounds are widest rather than wrong.</summary>
+    private TimeSpan? ClipTotalDuration() =>
+        ViewerMedia.NaturalDuration.HasTimeSpan ? ViewerMedia.NaturalDuration.TimeSpan : null;
+
+    /// <summary>Checks the in/out selection against the clip it is cut from, in one place
+    /// the panel's summary and the export both read from - so what the summary says and what
+    /// Save is willing to do can never disagree.</summary>
+    private ClipRangeResult CurrentClipRange() =>
+        ClipRange.Validate(ClipStart(), ClipEnd(), ClipTotalDuration(), ClipExporter.MinimumLength, ClipExporter.MaximumLength);
 
     // -------------------------------------------------------------- making one
 
-    private void OnViewerClipSave(object sender, RoutedEventArgs e) => _ = SaveViewerClipAsync();
+    private void OnViewerClipSave(object sender, RoutedEventArgs e) => _clipExportTask = SaveViewerClipAsync();
+
+    /// <summary>The export task in flight, so shutdown can wait for it to actually stop
+    /// rather than just requesting cancellation and hoping.</summary>
+    private Task? _clipExportTask;
 
     private async Task SaveViewerClipAsync()
     {
@@ -142,11 +214,21 @@ public partial class MainWindow
             return;
         }
 
+        var range = CurrentClipRange();
+        if (!range.IsValid)
+        {
+            ShowClipError(range.Error ?? "That in/out selection is not valid.");
+            return;
+        }
+
         string path;
         try
         {
             Directory.CreateDirectory(_settings.CaptureDirectory);
-            path = CaptureNaming.NewPath(_settings.CaptureDirectory, DateTime.Now, ClipExporter.ExtensionOf(format));
+            path = CaptureTimestampFormatter.NewPath(
+                _settings.CaptureDirectory, DateTime.Now, ClipExporter.ExtensionOf(format),
+                _settings.Timestamps, CultureInfo.CurrentCulture,
+                deviceName: _sessionDevice?.Name ?? "");
         }
         catch (Exception ex)
         {
@@ -155,7 +237,7 @@ public partial class MainWindow
             return;
         }
 
-        var request = new ClipRequest(item.Path, path, ClipStart(), ClipLength(), format);
+        var request = new ClipRequest(item.Path, path, range.Start, range.Duration, format);
         var cancellation = new CancellationTokenSource();
         _clipExport = cancellation;
         SetClipBusy(true);
@@ -189,13 +271,15 @@ public partial class MainWindow
         {
             cancellation.Dispose();
             _clipExport = null;
+            _clipExportTask = null;
         }
     }
 
     private void SetClipBusy(bool busy)
     {
-        ViewerClipSave.IsEnabled = !busy;
-        ViewerClipLength.IsEnabled = !busy;
+        ViewerClipSave.IsEnabled = !busy && CurrentClipRange().IsValid && _clipFormatAvailable;
+        ViewerClipIn.IsEnabled = !busy;
+        ViewerClipOut.IsEnabled = !busy;
         ViewerClipCopy.IsEnabled = !busy;
         ViewerClipGif.IsEnabled = !busy && ClipExporter.Supports(ClipFormat.Gif);
         ViewerClipWebM.IsEnabled = !busy && ClipExporter.Supports(ClipFormat.WebM);

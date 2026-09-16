@@ -243,10 +243,17 @@ public sealed class VideoSurface : Image, IDisposable
 
             Interlocked.Increment(ref _presentedFrames);
 
-            var latency = (DateTime.UtcNow - frame.DecodedAtUtc).TotalMicroseconds;
-            if (latency is > 0 and < 1_000_000)
+            // Tick subtraction against the frame's decode time, rather than a
+            // DateTime.UtcNow call every composition pass: at 60-144 Hz this is the
+            // hottest path in the app, and the wall-clock syscall is orders of
+            // magnitude slower than reading a Stopwatch counter.
+            var latencyTicks = now - frame.DecodedAtTicks;
+            // Anything over a second is a stalled decode, a paused machine, or a
+            // measurement glitch - never a real frame latency, and not worth skewing
+            // the average with.
+            if (latencyTicks > 0 && latencyTicks < Stopwatch.Frequency)
             {
-                Interlocked.Add(ref _latencySumMicroseconds, (long)latency);
+                Interlocked.Add(ref _latencySumMicroseconds, latencyTicks * 1_000_000L / Stopwatch.Frequency);
                 Interlocked.Increment(ref _latencySamples);
             }
         }

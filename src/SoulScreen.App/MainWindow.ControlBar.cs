@@ -46,7 +46,11 @@ public partial class MainWindow
             if (ControlBar.IsKeyboardFocusWithin) RevealControlBar();
         };
 
-        ContentGrid.SizeChanged += (_, _) => LayoutControlBar();
+        ContentGrid.SizeChanged += (_, _) =>
+        {
+            LayoutControlBar();
+            PositionFloatingControlBar();
+        };
 
         // The picture's menu is opened from the bar's last button as well as by a right-click.
         // Placed against the button for the one, it must go back to the pointer for the other.
@@ -83,6 +87,10 @@ public partial class MainWindow
 
         var appearing = ControlBar.Visibility != Visibility.Visible;
         ControlBar.Visibility = Visibility.Visible;
+        // The bar is laid out against the picture by the placement logic, not the XAML's
+        // default Stretch alignment: without this it would spread over the whole picture
+        // on first show, until some other action applied the placement.
+        ApplyControlBarPlacement();
         LayoutControlBar();
         PositionOverlays();
 
@@ -120,6 +128,10 @@ public partial class MainWindow
             if (ControlBar.DesiredSize.Width <= room) break;
             optional.Visibility = Visibility.Collapsed;
         }
+
+        // Collapsing items above changes the bar's size; the corners park it by that size,
+        // so re-run the placement once the bar has been through a layout pass.
+        Dispatcher.BeginInvoke(DispatcherPriority.Loaded, PositionFloatingControlBar);
     }
 
     /// <summary>A real movement of the pointer over the window.</summary>

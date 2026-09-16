@@ -50,10 +50,19 @@ internal sealed class MetricsHistory
     public double[] ToArray()
     {
         var result = new double[_count];
-        var start = IsFull ? _head : 0;
-        for (var i = 0; i < _count; i++)
-            result[i] = _values[(start + i) % _values.Length];
+        CopyTo(result.AsSpan());
         return result;
+    }
+
+    /// <summary>Copies the readings, oldest first, into <paramref name="destination"/>.
+    /// Avoids the per-call array allocation that <see cref="ToArray"/> would make on
+    /// every metrics tick when the graph is being redrawn.</summary>
+    public void CopyTo(Span<double> destination)
+    {
+        var n = Math.Min(_count, destination.Length);
+        var start = IsFull ? _head : 0;
+        for (var i = 0; i < n; i++)
+            destination[i] = _values[(start + i) % _values.Length];
     }
 
     /// <summary>Highest reading, or null while empty.</summary>

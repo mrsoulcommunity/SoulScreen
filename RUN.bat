@@ -48,6 +48,20 @@ if errorlevel 1 (
     goto :fail
 )
 
+rem Timestamp-literal fence: catches new ad-hoc date-formatting sites that bypass the
+rem CaptureTimestampFormatter / TimestampFormatting helpers. Fails the script with a
+rem pointer to the offending file and line.
+where powershell >nul 2>&1
+if not errorlevel 1 (
+    powershell -ExecutionPolicy Bypass -File "%~dp0scripts\check-timestamp-literals.ps1"
+    if errorlevel 1 (
+        echo.
+        echo The build has timestamp-literal sites that bypass the formatter. The CI step
+        echo above shows the path:line of each. Route them through the helpers instead.
+        goto :fail
+    )
+)
+
 rem -------------------------------------------------------------------------- run
 
 call :close_running_copy

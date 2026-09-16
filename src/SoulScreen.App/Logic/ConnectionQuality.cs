@@ -79,8 +79,18 @@ public sealed class ConnectionQualityMeter
         if (videoLoss || audioLoss) _events.Enqueue((now, videoLoss, audioLoss));
         while (_events.Count > 0 && now - _events.Peek().At > Window) _events.Dequeue();
 
-        VideoEvents = _events.Count(e => e.VideoLoss);
-        AudioEvents = _events.Count(e => e.AudioLoss);
+        // Plain loop rather than LINQ: this runs on every metrics tick, the queue holds
+        // events from the last ten seconds, and a lambda here would allocate a closure
+        // and an iterator each time it ran.
+        var video = 0;
+        var audio = 0;
+        foreach (var entry in _events)
+        {
+            if (entry.VideoLoss) video++;
+            if (entry.AudioLoss) audio++;
+        }
+        VideoEvents = video;
+        AudioEvents = audio;
 
         Level = now - _startedAt.Value < Warmup ? ConnectionQualityLevel.Unknown : Judge(VideoEvents, AudioEvents);
         return Level;

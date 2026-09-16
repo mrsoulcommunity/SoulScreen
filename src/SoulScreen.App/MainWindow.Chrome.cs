@@ -269,6 +269,8 @@ public partial class MainWindow
         _cursorTimer ??= CreateCursorTimer();
         _cursorTimer.Start();
         Dispatcher.InvokeAsync(UpdateControlBar, DispatcherPriority.Loaded);
+        // The picture arrives as the chrome leaves: one eased move, not a hard swap.
+        Dispatcher.InvokeAsync(() => TransitionContentForModeChange(entering: true), DispatcherPriority.Loaded);
     }
 
     private void ExitFullscreen()
@@ -301,6 +303,7 @@ public partial class MainWindow
         // The window may come back at the size it left, which raises no SizeChanged; fit the
         // control bar once the layout has settled.
         Dispatcher.InvokeAsync(UpdateControlBar, DispatcherPriority.Loaded);
+        Dispatcher.InvokeAsync(() => TransitionContentForModeChange(entering: false), DispatcherPriority.Loaded);
 
         _cursorTimer?.Stop();
         Cursor = null;
@@ -323,6 +326,48 @@ public partial class MainWindow
         ViewerPanel.Padding = inset;
         LogPanel.Margin = new Thickness(0, 0, 0, bottom);
         PositionOverlays();
+    }
+
+    /// <summary>
+    /// The slide-and-fade that tells the eye the chrome has changed modes, the same 180 ms
+    /// language the captures toolbar speaks: content eases eight pixels up from below when
+    /// the picture takes the whole window, and settles down into place when the chrome
+    /// returns. Skipped entirely when Windows has been asked to keep animation to a minimum.
+    /// </summary>
+    private void TransitionContentForModeChange(bool entering)
+    {
+        if (!Motion.Enabled)
+        {
+            VideoHost.BeginAnimation(OpacityProperty, null);
+            VideoHost.Opacity = 1;
+            var rt = VideoHost.RenderTransform as TranslateTransform;
+            if (rt is not null)
+            {
+                rt.BeginAnimation(TranslateTransform.YProperty, null);
+                rt.Y = 0;
+            }
+            return;
+        }
+
+        var y = entering ? 10.0 : -10.0;
+        if (VideoHost.RenderTransform is not TranslateTransform transform)
+        {
+            transform = new TranslateTransform();
+            VideoHost.RenderTransform = transform;
+        }
+        transform.BeginAnimation(TranslateTransform.YProperty, null);
+        transform.Y = y;
+        transform.BeginAnimation(TranslateTransform.YProperty, new DoubleAnimation(0, TimeSpan.FromMilliseconds(180))
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+        });
+
+        VideoHost.BeginAnimation(OpacityProperty, null);
+        VideoHost.Opacity = 0.5;
+        VideoHost.BeginAnimation(OpacityProperty, new DoubleAnimation(1, TimeSpan.FromMilliseconds(180))
+        {
+            EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
+        });
     }
 
     private DispatcherTimer CreateCursorTimer()
@@ -468,6 +513,7 @@ public partial class MainWindow
             case Key.E when !shift: ToggleMarkup(); break;
             case Key.C when shift: CopySnapshot(); break;
             case Key.M when shift: ToggleMiniPlayer(); break;
+            case Key.P when shift: TogglePresentationMode(); break;
             case Key.M: MuteButton.IsChecked = MuteButton.IsChecked != true; break;
             case Key.G: CapturesButton.IsChecked = CapturesButton.IsChecked != true; break;
             case Key.R when shift: RotateBy(90); break;
@@ -539,6 +585,7 @@ public partial class MainWindow
         if (SettingsPanel.Visibility == Visibility.Visible) { SettingsButton.IsChecked = false; return true; }
         if (MarkupColorButton.IsChecked == true) { MarkupColorButton.IsChecked = false; return true; }
         if (IsMarkupActive) { MarkupButton.IsChecked = false; return true; }
+        if (_presentationMode) { TogglePresentationMode(); return true; }
         if (_focusMode) { SetFocusMode(false); return true; }
         if (_isMiniPlayer) { ExitMiniPlayer(); return true; }
         if (_isFullscreen) { ToggleFullscreen(); return true; }
@@ -588,6 +635,7 @@ public partial class MainWindow
         ("Ctrl+I", "Statistics overlay"),
         ("Ctrl+T", "Keep the window on top"),
         ("Ctrl+H", "Focus mode: hide the chrome; Esc or Ctrl+H brings it back"),
+        ("Ctrl+Shift+P", "Presentation mode: fullscreen and focus mode together"),
         ("Ctrl+L", "Activity log"),
         ("Ctrl+,", "Settings"),
         ("Ctrl+Alt+Shift+S", "Screenshot from any app, once switched on"),

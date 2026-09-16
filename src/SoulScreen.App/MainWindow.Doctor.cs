@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Diagnostics;
+using System.Globalization;
 using System.Text;
 using System.Windows;
 using System.Windows.Media;
@@ -7,6 +8,7 @@ using System.Windows.Threading;
 using SoulScreen.AirPlay.FairPlay;
 using SoulScreen.App.Logic;
 using SoulScreen.Core.Sources;
+using SoulScreen.Core.Time;
 using SoulScreen.Media;
 
 namespace SoulScreen.App;
@@ -343,7 +345,9 @@ public partial class MainWindow
     private void OnDoctorCopy(object sender, RoutedEventArgs e)
     {
         var report = new StringBuilder();
-        report.AppendLine($"SoulScreen connection check, {DateTime.Now:g}");
+        var mode = TimestampFormatting.Resolve(
+            _settings.Timestamps.UseShamsi, _settings.Timestamps.ShowGregorianAlongside, CultureInfo.CurrentCulture);
+        report.AppendLine($"SoulScreen connection check, {TimestampFormatting.FormatDateTime(DateTime.Now, mode)}");
         report.AppendLine(DoctorSummary.Text);
         report.AppendLine();
         foreach (var check in _doctorChecks)

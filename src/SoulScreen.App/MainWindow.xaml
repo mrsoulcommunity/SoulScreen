@@ -64,6 +64,7 @@
                     <ColumnDefinition Width="*" MinWidth="0" />
                     <ColumnDefinition Width="Auto" />
                     <ColumnDefinition Width="Auto" />
+                    <ColumnDefinition Width="Auto" />
                 </Grid.ColumnDefinitions>
 
                 <!-- The name gives way first and ends in an ellipsis; the timer and the connection
@@ -112,7 +113,56 @@
                                   ToolTip="More" AutomationProperties.Name="More" />
                 </StackPanel>
 
-                <StackPanel x:Name="CaptionButtons" Grid.Column="2" Orientation="Horizontal"
+                <!-- The picture controls in their docked form: a thin strip of buttons that sits
+                     in the caption strip beside the rest of the window's chrome and never fades.
+                     Shown only when the user has asked for the docked placement; the floating
+                     copy below takes over in every other mode. The whole bar blends with the
+                     chrome rather than carrying its own border: a subtle left-side separator
+                     is enough to mark the join. -->
+                <Border x:Name="ControlBarDocked" Grid.Column="2" Visibility="Collapsed" Background="{DynamicResource SurfaceRaised}"
+                        BorderThickness="0" CornerRadius="0" Padding="6,0,4,0" Margin="0"
+                        TextElement.FontFamily="{StaticResource TextFont}" AutomationProperties.Name="Picture controls (docked)">
+                    <Border BorderBrush="{DynamicResource BorderBrush}" BorderThickness="1,0,0,0" Margin="6,8" Padding="0">
+                    <StackPanel x:Name="ControlBarDockedItems" Orientation="Horizontal" VerticalAlignment="Center">
+                        <ToggleButton x:Name="RecordButtonDocked" Style="{StaticResource IconToggle}" Content="&#xE7C8;"
+                                      Visibility="Collapsed" ToolTip="Stop recording (Ctrl+R)" Click="OnRecordDockedClick"
+                                      AutomationProperties.Name="Record the session" />
+                        <Button x:Name="SnapshotButtonDocked" Style="{StaticResource IconButton}" Content="&#xE722;"
+                                Click="OnSnapshot" IsEnabled="False" ToolTip="Save a screenshot (Ctrl+S)"
+                                AutomationProperties.Name="Save a screenshot" />
+                        <ToggleButton x:Name="MarkupButtonDocked" Style="{StaticResource IconToggle}" Content="&#xEDFB;"
+                                      Visibility="Collapsed" Click="OnMarkupDockedToggled"
+                                      ToolTip="Markup (Ctrl+E)" AutomationProperties.Name="Markup" />
+                        <Rectangle Width="1" Margin="4,11" Fill="{DynamicResource BorderBrush}" />
+                        <ToggleButton x:Name="MuteButtonDocked" Style="{StaticResource IconToggle}" Content="&#xE767;"
+                                      Visibility="Collapsed" Click="OnMuteDockedClick"
+                                      ToolTip="Mute the phone's audio (Ctrl+M)" AutomationProperties.Name="Mute the phone's audio" />
+                        <Slider x:Name="VolumeSliderDocked" Style="{StaticResource HudVolumeSlider}" Visibility="Collapsed"
+                                Minimum="0" Maximum="1" Value="1" IsMoveToPointEnabled="True"
+                                Width="80" ToolTip="Volume" AutomationProperties.Name="Phone audio volume"
+                                ValueChanged="OnVolumeDockedChanged" />
+                        <Rectangle Width="1" Margin="4,11" Fill="{DynamicResource BorderBrush}" />
+                        <Button x:Name="PauseButtonDocked" Style="{StaticResource IconButton}" Content="&#xE769;"
+                                Click="OnMenuPause" ToolTip="Pause the picture (Space)"
+                                AutomationProperties.Name="Pause the picture" />
+                        <Button x:Name="MiniPlayerButtonDocked" Style="{StaticResource IconButton}" Content="&#xEE49;"
+                                Click="OnToggleMiniPlayer" ToolTip="Mini player (Ctrl+Shift+M)"
+                                AutomationProperties.Name="Mini player" />
+                        <Button x:Name="FullscreenButtonDocked" Style="{StaticResource IconButton}" Content="&#xE740;"
+                                Click="OnToggleFullscreen" ToolTip="Fullscreen (F11)"
+                                AutomationProperties.Name="Fullscreen" />
+                        <ToggleButton x:Name="ControlBarMenuDocked" Style="{StaticResource IconToggle}" Content="&#xE712;"
+                                      ToolTip="Picture control placement" Click="OnControlBarPlacementMenu"
+                                      AutomationProperties.Name="Picture control placement" />
+                    </StackPanel>
+                    </Border>
+                </Border>
+
+                <!-- The picture controls in their docked form: a thin strip of buttons that sits
+                     in the caption strip beside the rest of the window's chrome and never fades.
+                     Shown only when the user has asked for the docked placement; the floating
+                     copy below takes over in every other mode. -->
+                <StackPanel x:Name="CaptionButtons" Grid.Column="3" Orientation="Horizontal"
                             shell:WindowChrome.IsHitTestVisibleInChrome="True">
                     <Rectangle Width="1" Margin="8,13" Fill="{DynamicResource BorderBrush}" />
 
@@ -143,6 +193,8 @@
                                           AutomationProperties.Name="Statistics overlay" Checked="OnStatsToggled" Unchecked="OnStatsToggled" />
                             <ToggleButton x:Name="LogButton" Style="{StaticResource MenuToggleRow}" Content="Activity log" Tag="Ctrl+L"
                                           AutomationProperties.Name="Activity log" Checked="OnLogToggled" Unchecked="OnLogToggled" />
+                            <Button Style="{StaticResource MenuRow}" Content="Presentation mode" Tag="Ctrl+Shift+P"
+                                    AutomationProperties.Name="Presentation mode" Click="OnPresentationMode" />
                             <Rectangle Style="{StaticResource MenuDivider}" />
                             <Button Style="{StaticResource MenuRow}" Content="Open the capture folder" Click="OnOpenCaptureFolder" />
                             <Button Style="{StaticResource MenuRow}" Content="Check the connection" Click="OnShowDoctor" />
@@ -221,6 +273,14 @@
                             <MenuItem Header="30 minutes" Tag="30" Click="OnMenuRecordTimed" />
                             <Separator />
                             <MenuItem x:Name="MenuCancelTimedStop" Header="Cancel the timed stop" Click="OnMenuCancelTimedStop" />
+                        </MenuItem>
+                        <MenuItem x:Name="MenuScheduleRecording" Header="Start recording in…" Visibility="Collapsed">
+                            <MenuItem Header="1 minute" Tag="1" Click="OnMenuScheduleRecording" />
+                            <MenuItem Header="5 minutes" Tag="5" Click="OnMenuScheduleRecording" />
+                            <MenuItem Header="15 minutes" Tag="15" Click="OnMenuScheduleRecording" />
+                            <MenuItem Header="30 minutes" Tag="30" Click="OnMenuScheduleRecording" />
+                            <Separator />
+                            <MenuItem x:Name="MenuCancelScheduledRecording" Header="Cancel the scheduled recording" Click="OnMenuCancelScheduledRecording" />
                         </MenuItem>
                         <MenuItem Header="Show captures" InputGestureText="Ctrl+G" Click="OnMenuCaptures" />
                         <Separator />
@@ -326,45 +386,56 @@
             <!-- ============================ control bar ============================
                  Everything that acts on the mirrored picture, floating over its foot as QuickTime's
                  controls do. It appears when the pointer moves and fades once it rests, so the
-                 picture is left alone while it is being watched. Dark whatever the theme: it sits
-                 on video. -->
-            <Border x:Name="ControlBar" Visibility="Collapsed" HorizontalAlignment="Center" VerticalAlignment="Bottom"
-                    Margin="12,0,12,16" Panel.ZIndex="23" Background="{StaticResource HudBackground}"
-                    BorderBrush="{StaticResource HudBorder}" BorderThickness="1" CornerRadius="16" Padding="6,5"
-                    TextElement.FontFamily="{StaticResource TextFont}" AutomationProperties.Name="Picture controls">
+                 picture is left alone while it is being watched. Deliberately minimal: a single
+                 row of icons grouped into three clusters - capture, audio, picture - with the
+                 drag grip at the end. No shortcut labels: the tooltips and the help sheet teach
+                 them. Dark whatever the theme: it sits on video. -->
+            <Border x:Name="ControlBar" Visibility="Collapsed" Panel.ZIndex="23" Background="{StaticResource HudBackground}"
+                    BorderBrush="{StaticResource HudBorder}" BorderThickness="1" CornerRadius="17" Padding="7,5"
+                    HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="12,0,12,16"
+                    TextElement.FontFamily="{StaticResource TextFont}" AutomationProperties.Name="Picture controls"
+                    MouseEnter="OnControlBarMouseEnter" MouseLeave="OnControlBarMouseLeave"
+                    MouseMove="OnControlBarGrabMove" MouseLeftButtonUp="OnControlBarGrabReleased"
+                    LostMouseCapture="OnControlBarLostMouseCapture">
                 <Border.Effect>
-                    <DropShadowEffect BlurRadius="22" ShadowDepth="4" Opacity="0.45" />
+                    <DropShadowEffect BlurRadius="18" ShadowDepth="3" Opacity="0.35" />
                 </Border.Effect>
-                <StackPanel x:Name="ControlBarItems" Orientation="Horizontal">
-                    <!-- A drawn dot rather than a glyph: it reads as "record" at once, and cannot be
-                         affected by which icon font happens to be installed. -->
-                    <ToggleButton x:Name="RecordButton" Style="{StaticResource HudPlainToggle}"
-                                  ToolTip="Record to MP4 (Ctrl+R)" IsEnabled="False" Visibility="Collapsed"
-                                  AutomationProperties.Name="Record the session"
-                                  Checked="OnRecordChanged" Unchecked="OnRecordChanged">
-                        <Grid Width="16" Height="16">
-                            <Ellipse Stroke="{StaticResource HudText}" StrokeThickness="1.5" />
-                            <Ellipse x:Name="RecordDot" Width="8" Height="8" Fill="{StaticResource HudRecord}" />
-                        </Grid>
-                    </ToggleButton>
+                <StackPanel x:Name="ControlBarItems" Orientation="Horizontal" Background="Transparent">
+                    <!-- Capture cluster: record, screenshot, markup. A drawn dot rather than a glyph
+                         for record: it reads as "record" at once, and cannot be affected by which
+                         icon font happens to be installed. -->
+                    <Grid Margin="2,0">
+                        <ToggleButton x:Name="RecordButton" Style="{StaticResource HudPlainToggle}"
+                                      ToolTip="Record to MP4 (Ctrl+R)" IsEnabled="False" Visibility="Collapsed"
+                                      AutomationProperties.Name="Record the session"
+                                      Checked="OnRecordChanged" Unchecked="OnRecordChanged">
+                            <Grid Width="16" Height="16">
+                                <Ellipse Stroke="{StaticResource HudText}" StrokeThickness="1.5" />
+                                <Ellipse x:Name="RecordDot" Width="8" Height="8" Fill="{StaticResource HudRecord}" />
+                            </Grid>
+                        </ToggleButton>
+                    </Grid>
                     <Button x:Name="SnapshotButton" Style="{StaticResource HudButton}" Content="&#xE722;"
                             ToolTip="Save a screenshot (Ctrl+S)" Click="OnSnapshot" IsEnabled="False"
                             AutomationProperties.Name="Save a screenshot" />
                     <ToggleButton x:Name="MarkupButton" Style="{StaticResource HudToggle}" Content="&#xEDFB;"
                                   ToolTip="Markup (Ctrl+E)" Visibility="Collapsed" AutomationProperties.Name="Markup"
                                   Checked="OnMarkupToggled" Unchecked="OnMarkupToggled" />
-                    <Rectangle x:Name="ControlBarAudioDivider" Width="1" Margin="5,7" Fill="{StaticResource HudBorder}" />
+
+                    <!-- Audio cluster: mute and volume. Hidden with the audio stream; a volume
+                         control for a stream that is not playing is noise. -->
+                    <Rectangle x:Name="ControlBarAudioDivider" Width="1" Height="16" Margin="7,0" Fill="{StaticResource HudBorder}" />
                     <ToggleButton x:Name="MuteButton" Style="{StaticResource HudPlainToggle}" Content="&#xE767;"
                                   ToolTip="Mute the phone's audio (Ctrl+M)" Visibility="Collapsed"
                                   AutomationProperties.Name="Mute the phone's audio"
                                   Checked="OnMuteChanged" Unchecked="OnMuteChanged" />
-                    <!-- Beside the mute button because they control the same thing, and hidden with
-                         it: a level for a stream that is not playing is noise. -->
                     <Slider x:Name="VolumeSlider" Style="{StaticResource HudVolumeSlider}" Visibility="Collapsed"
                             Minimum="0" Maximum="1" Value="1" IsMoveToPointEnabled="True"
                             ToolTip="Volume" AutomationProperties.Name="Phone audio volume"
                             ValueChanged="OnVolumeChanged" />
-                    <Rectangle x:Name="ControlBarViewDivider" Width="1" Margin="5,7" Fill="{StaticResource HudBorder}" />
+
+                    <!-- Picture cluster: pause, mini player, fullscreen, more, grip. -->
+                    <Rectangle x:Name="ControlBarViewDivider" Width="1" Height="16" Margin="7,0" Fill="{StaticResource HudBorder}" />
                     <Button x:Name="PauseButton" Style="{StaticResource HudButton}" Content="&#xE769;"
                             ToolTip="Pause the picture (Space)" Click="OnMenuPause"
                             AutomationProperties.Name="Pause the picture" />
@@ -377,8 +448,41 @@
                     <Button x:Name="ControlBarMore" Style="{StaticResource HudButton}" Content="&#xE712;"
                             ToolTip="More" Click="OnControlBarMore"
                             AutomationProperties.Name="More picture options" />
+
+                    <!-- The grip: six quiet dots at the end of the row, doubling as the
+                         visible affordance for a drag that the whole bar answers to. Drag to
+                         move; double-click to cycle its placement. -->
+                    <Border x:Name="ControlBarGrabHandle" Margin="6,0,1,0" Padding="7,10" Background="Transparent"
+                          Cursor="SizeAll" VerticalAlignment="Center"
+                          ToolTip="Drag to move; double-click for placement (Ctrl+Shift+F/C/D/B)"
+                          AutomationProperties.Name="Move the picture controls"
+                          MouseLeftButtonDown="OnControlBarGrab"
+                          MouseLeftButtonUp="OnControlBarGrabReleased"
+                          MouseMove="OnControlBarGrabMove">
+                        <ToolTipService.InitialShowDelay>0</ToolTipService.InitialShowDelay>
+                        <Grid>
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="3" />
+                                <ColumnDefinition Width="3" />
+                            </Grid.ColumnDefinitions>
+                            <Grid.RowDefinitions>
+                                <RowDefinition Height="3" />
+                                <RowDefinition Height="3" />
+                                <RowDefinition Height="3" />
+                            </Grid.RowDefinitions>
+                            <Ellipse Grid.Row="0" Grid.Column="0" Width="2.5" Height="2.5" Fill="{StaticResource HudText}" Opacity="0.45" />
+                            <Ellipse Grid.Row="0" Grid.Column="1" Width="2.5" Height="2.5" Fill="{StaticResource HudText}" Opacity="0.45" />
+                            <Ellipse Grid.Row="1" Grid.Column="0" Width="2.5" Height="2.5" Fill="{StaticResource HudText}" Opacity="0.45" />
+                            <Ellipse Grid.Row="1" Grid.Column="1" Width="2.5" Height="2.5" Fill="{StaticResource HudText}" Opacity="0.45" />
+                            <Ellipse Grid.Row="2" Grid.Column="0" Width="2.5" Height="2.5" Fill="{StaticResource HudText}" Opacity="0.45" />
+                            <Ellipse Grid.Row="2" Grid.Column="1" Width="2.5" Height="2.5" Fill="{StaticResource HudText}" Opacity="0.45" />
+                        </Grid>
+                    </Border>
                 </StackPanel>
             </Border>
+
+            <!-- First-launch help used to float here as a speech-bubble; the minimal bar
+                 needs no introduction beyond its tooltips, so the element is gone. -->
 
             <!-- The mini player's controls: laid over the picture while the pointer is on the
                  window. The grid has no background, so everywhere but the buttons still reaches
@@ -694,20 +798,46 @@
                                                 CornerRadius="0,0,11,11">
                                             <StackPanel>
                                                 <TextBlock x:Name="ReceiverError" Style="{StaticResource ErrorText}" Visibility="Collapsed" Margin="0,0,0,8" />
-                                                <Grid>
-                                                    <Grid.ColumnDefinitions>
-                                                        <ColumnDefinition Width="*" />
-                                                        <ColumnDefinition Width="Auto" />
-                                                        <ColumnDefinition Width="Auto" />
-                                                    </Grid.ColumnDefinitions>
+                                                <!-- A WrapPanel, not a fixed row: at a phone-narrow window the
+                                                     note takes its own line and the two buttons stay reachable. -->
+                                                <WrapPanel>
                                                     <TextBlock Text="These take effect when the receiver restarts." Style="{StaticResource Caption}"
-                                                               Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center" TextWrapping="Wrap" Margin="0,0,10,0" />
-                                                    <Button Grid.Column="1" Content="Discard" Style="{StaticResource SmallButton}" Click="OnDiscardReceiverChanges" Margin="0,0,8,0" />
-                                                    <Button Grid.Column="2" Content="Apply and restart" Style="{StaticResource PrimaryButton}" Padding="12,6" FontSize="12.5"
-                                                            Click="OnApplySettings" />
-                                                </Grid>
+                                                               Foreground="{DynamicResource TextSecondary}" VerticalAlignment="Center"
+                                                               TextWrapping="Wrap" Margin="0,0,10,6" MinWidth="160" />
+                                                    <Button Content="Discard" Style="{StaticResource SmallButton}" Click="OnDiscardReceiverChanges" Margin="0,0,8,0" VerticalAlignment="Center" />
+                                                    <Button Content="Apply and restart" Style="{StaticResource PrimaryButton}" Padding="12,6" FontSize="12.5"
+                                                            Click="OnApplySettings" VerticalAlignment="Center" />
+                                                </WrapPanel>
                                             </StackPanel>
                                         </Border>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- ============================== regional ============================== -->
+                                <TextBlock Text="REGIONAL" Style="{StaticResource SectionTitle}" />
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <controls:SettingRow x:Name="UseShamsiRow" Title="Use Persian (Shamsi) dates" IsFirst="True"
+                                                             Detail="Show dates in the Persian calendar. Off uses the calendar the rest of Windows uses.">
+                                            <CheckBox x:Name="UseShamsiCheck" Style="{StaticResource Switch}" Click="OnTimestampSettingChanged" />
+                                        </controls:SettingRow>
+                                        <controls:SettingRow x:Name="ShowGregorianRow" Title="Show Gregorian next to Shamsi"
+                                                             Detail="Append the Gregorian date in parentheses, so the two are read side by side.">
+                                            <CheckBox x:Name="ShowGregorianCheck" Style="{StaticResource Switch}" Click="OnTimestampSettingChanged" />
+                                        </controls:SettingRow>
+                                        <controls:SettingRow Title="First day of week" Stacked="True"
+                                                             Detail="Used by any calendar widget. Defaults to Saturday, the working week in Iran.">
+                                            <ComboBox x:Name="FirstDayBox" MinWidth="160" SelectionChanged="OnFirstDayChanged">
+                                                <ComboBoxItem Content="Saturday" />
+                                                <ComboBoxItem Content="Sunday" />
+                                                <ComboBoxItem Content="Monday" />
+                                            </ComboBox>
+                                        </controls:SettingRow>
+                                        <controls:SettingRow Title="Preview" Stacked="True"
+                                                             Detail="What a date looks like with the settings above.">
+                                            <TextBlock x:Name="TimestampPreview" Style="{StaticResource Caption}"
+                                                       Foreground="{DynamicResource TextSecondary}" Margin="0,4,0,0" />
+                                        </controls:SettingRow>
                                     </StackPanel>
                                 </Border>
 
@@ -759,6 +889,28 @@
                                         </controls:SettingRow>
                                         <controls:SettingRow Title="Round the picture's corners" Detail="Draws the phone's screen with its own rounded corners in the window.">
                                             <CheckBox x:Name="RoundedCornersCheck" Style="{StaticResource Switch}" Click="OnRoundedCornersChanged" />
+                                        </controls:SettingRow>
+                                        <controls:SettingRow x:Name="ControlBarPlacementRow" Title="Picture controls" Stacked="True"
+                                                             Detail="A quiet row of icons over the picture. Drag its dots to move it; double-click the dots to change where it lives.">
+                                            <StackPanel>
+                                                <Border Style="{StaticResource SegmentTrack}" HorizontalAlignment="Left">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <RadioButton x:Name="ControlBarPlacementFloating" Style="{StaticResource Segment}" Content="Over the picture" GroupName="ControlBarPlacement" Checked="OnControlBarPlacementChanged" />
+                                                        <RadioButton x:Name="ControlBarPlacementCorner" Style="{StaticResource Segment}" Content="In a corner" GroupName="ControlBarPlacement" Checked="OnControlBarPlacementChanged" />
+                                                        <RadioButton x:Name="ControlBarPlacementFree" Style="{StaticResource Segment}" Content="Where I drag it" GroupName="ControlBarPlacement" Checked="OnControlBarPlacementChanged" />
+                                                        <RadioButton x:Name="ControlBarPlacementDocked" Style="{StaticResource Segment}" Content="In the title bar" GroupName="ControlBarPlacement" Checked="OnControlBarPlacementChanged" />
+                                                    </StackPanel>
+                                                </Border>
+                                                <Border x:Name="ControlBarCornerRow" Style="{StaticResource SegmentTrack}" HorizontalAlignment="Left" Margin="0,8,0,0">
+                                                    <StackPanel Orientation="Horizontal">
+                                                        <RadioButton x:Name="ControlBarCornerTL" Style="{StaticResource Segment}" Content="Top left" GroupName="ControlBarCorner" Checked="OnControlBarCornerChanged" />
+                                                        <RadioButton x:Name="ControlBarCornerTR" Style="{StaticResource Segment}" Content="Top right" GroupName="ControlBarCorner" Checked="OnControlBarCornerChanged" />
+                                                        <RadioButton x:Name="ControlBarCornerBL" Style="{StaticResource Segment}" Content="Bottom left" GroupName="ControlBarCorner" Checked="OnControlBarCornerChanged" />
+                                                        <RadioButton x:Name="ControlBarCornerBR" Style="{StaticResource Segment}" Content="Bottom right" GroupName="ControlBarCorner" Checked="OnControlBarCornerChanged" />
+                                                        <RadioButton x:Name="ControlBarCornerBC" Style="{StaticResource Segment}" Content="Bottom centre" GroupName="ControlBarCorner" Checked="OnControlBarCornerChanged" />
+                                                    </StackPanel>
+                                                </Border>
+                                            </StackPanel>
                                         </controls:SettingRow>
                                         <controls:SettingRow x:Name="LatencyRow" Title="Smoothness" Stacked="True"
                                                              Detail="How much picture is held back to even out Wi-Fi. More is smoother; less is quicker.">
@@ -967,6 +1119,7 @@
                                                                 <ColumnDefinition Width="Auto" />
                                                                 <ColumnDefinition Width="*" />
                                                                 <ColumnDefinition Width="Auto" />
+                                                                <ColumnDefinition Width="Auto" />
                                                             </Grid.ColumnDefinitions>
                                                             <Border Width="30" Height="30" CornerRadius="15" Background="{DynamicResource AccentTint}" Margin="0,0,12,0">
                                                                 <TextBlock Text="&#xE8EA;" FontFamily="{StaticResource IconFont}" FontSize="13"
@@ -977,6 +1130,10 @@
                                                                 <TextBlock Text="{Binding Summary}" Style="{StaticResource Caption}" Margin="0,3,0,0" TextTrimming="CharacterEllipsis" />
                                                             </StackPanel>
                                                             <TextBlock Grid.Column="2" Text="{Binding LastSeen}" Style="{StaticResource Caption}" VerticalAlignment="Center" Margin="12,0,0,0" />
+                                                            <!-- This phone's own auto-record choice, kept apart from every other phone's. -->
+                                                            <CheckBox Grid.Column="3" Style="{StaticResource Switch}" Margin="12,0,0,0" VerticalAlignment="Center"
+                                                                      IsChecked="{Binding AutoRecord, Mode=OneWay}" ToolTip="Start recording automatically when this iPhone connects"
+                                                                      AutomationProperties.Name="{Binding AutoRecordAutomationName}" Click="OnRecentDeviceAutoRecordChanged" />
                                                         </Grid>
                                                     </Border>
                                                 </DataTemplate>
@@ -984,6 +1141,35 @@
                                         </ItemsControl>
                                         <Border x:Name="RecentFooter" Padding="14,9" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource BorderSubtle}">
                                             <Button Content="Clear history" Style="{StaticResource LinkButton}" HorizontalAlignment="Left" Click="OnClearHistory" />
+                                        </Border>
+                                    </StackPanel>
+                                </Border>
+
+                                <!-- ============================== updates ============================== -->
+                                <TextBlock Text="UPDATES" Style="{StaticResource SectionTitle}" />
+                                <Border Style="{StaticResource Card}">
+                                    <StackPanel>
+                                        <controls:SettingRow Title="Check for updates automatically" IsFirst="True"
+                                                             Detail="A quiet check on startup and every few hours. Nothing downloads without your say-so.">
+                                            <CheckBox x:Name="UpdateAutoCheckToggle" Style="{StaticResource Switch}" Click="OnUpdateAutoCheckChanged" />
+                                        </controls:SettingRow>
+                                        <Border Padding="14,12" BorderThickness="0,1,0,0" BorderBrush="{DynamicResource BorderSubtle}">
+                                            <StackPanel>
+                                                <TextBlock x:Name="UpdateStatusText" Style="{StaticResource Body}" FontWeight="SemiBold" TextWrapping="Wrap" />
+                                                <TextBlock x:Name="UpdateDetailText" Style="{StaticResource Caption}" TextWrapping="Wrap" Margin="0,3,0,0" />
+                                                <ProgressBar x:Name="UpdateProgressBar" Visibility="Collapsed" Height="5" Margin="0,10,0,0"
+                                                             Minimum="0" Maximum="100" />
+                                                <WrapPanel Margin="0,10,0,0">
+                                                    <Button x:Name="UpdateCheckButton" Content="Check now" Style="{StaticResource SmallButton}"
+                                                            Margin="0,0,8,6" Click="OnCheckForUpdates" />
+                                                    <Button x:Name="UpdateInstallButton" Content="Download and install" Style="{StaticResource SmallButton}"
+                                                            Visibility="Collapsed" Margin="0,0,8,6" Click="OnInstallUpdate" />
+                                                    <Button x:Name="UpdateSkipButton" Content="Skip this version" Style="{StaticResource SmallButton}"
+                                                            Visibility="Collapsed" Margin="0,0,8,6" Click="OnSkipUpdate" />
+                                                    <Button x:Name="UpdateOpenPageButton" Content="Open the release page" Style="{StaticResource SmallButton}"
+                                                            Visibility="Collapsed" Margin="0,0,8,6" Click="OnOpenReleasePage" />
+                                                </WrapPanel>
+                                            </StackPanel>
                                         </Border>
                                     </StackPanel>
                                 </Border>
@@ -1046,42 +1232,57 @@
                         <Button Grid.Column="1" Style="{StaticResource IconButton}" Content="&#xE8BB;" FontSize="11" VerticalAlignment="Top"
                                 ToolTip="Close (Esc)" Click="OnCloseCaptures" AutomationProperties.Name="Close captures" />
                     </Grid>
-                    <Grid Grid.Row="1" Margin="24,10,20,8">
-                        <Grid.ColumnDefinitions>
-                            <ColumnDefinition Width="Auto" />
-                            <ColumnDefinition Width="*" />
-                            <ColumnDefinition Width="Auto" />
-                        </Grid.ColumnDefinitions>
-                        <Border Style="{StaticResource SegmentTrack}" HorizontalAlignment="Left">
-                            <StackPanel Orientation="Horizontal">
-                                <RadioButton x:Name="CapturesAll" Style="{StaticResource Segment}" Content="All" GroupName="CaptureFilter"
-                                             IsChecked="True" MinWidth="40" Padding="9,3" Checked="OnCaptureFilterChanged" />
-                                <RadioButton x:Name="CapturesShots" Style="{StaticResource Segment}" Content="Screenshots" GroupName="CaptureFilter"
-                                             MinWidth="40" Padding="9,3" Checked="OnCaptureFilterChanged" />
-                                <RadioButton x:Name="CapturesVideos" Style="{StaticResource Segment}" Content="Recordings" GroupName="CaptureFilter"
-                                             MinWidth="40" Padding="9,3" Checked="OnCaptureFilterChanged" />
-                            </StackPanel>
-                        </Border>
-                        <StackPanel Grid.Column="1" Orientation="Horizontal" Margin="10,0,10,0" HorizontalAlignment="Center">
-                            <TextBox x:Name="CapturesSearchBox" Width="180" Style="{StaticResource SearchBox}" Tag="Search captures"
-                                     TextChanged="OnCapturesSearchChanged" AutomationProperties.Name="Search captures" />
-                            <Border Style="{StaticResource SegmentTrack}" Margin="8,0,0,0">
+                    <!-- One filter row, four parts. When the window is too narrow for them
+                         all on one line, CapturesToolbarLayout moves the search + sort pair -
+                         the widest, most give-worthy part - onto a second row. -->
+                    <Grid x:Name="CapturesToolbar" Grid.Row="1" Margin="24,10,20,8">
+                        <Grid.RowDefinitions>
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                        </Grid.RowDefinitions>
+                        <Grid Grid.Row="0">
+                            <Grid.ColumnDefinitions>
+                                <ColumnDefinition Width="Auto" />
+                                <ColumnDefinition Width="*" />
+                                <ColumnDefinition Width="Auto" />
+                            </Grid.ColumnDefinitions>
+                            <Border Style="{StaticResource SegmentTrack}" HorizontalAlignment="Left">
                                 <StackPanel Orientation="Horizontal">
-                                    <RadioButton x:Name="CapturesSortNewest" Style="{StaticResource Segment}" Content="Newest" GroupName="CaptureSort"
-                                                 IsChecked="True" MinWidth="40" Padding="8,3" Checked="OnCaptureSortChanged" />
-                                    <RadioButton x:Name="CapturesSortOldest" Style="{StaticResource Segment}" Content="Oldest" GroupName="CaptureSort"
-                                                 MinWidth="40" Padding="8,3" Checked="OnCaptureSortChanged" />
-                                    <RadioButton x:Name="CapturesSortLargest" Style="{StaticResource Segment}" Content="Largest" GroupName="CaptureSort"
-                                                 MinWidth="40" Padding="8,3" Checked="OnCaptureSortChanged" />
+                                    <RadioButton x:Name="CapturesAll" Style="{StaticResource Segment}" Content="All" GroupName="CaptureFilter"
+                                                 IsChecked="True" MinWidth="40" Padding="9,3" Checked="OnCaptureFilterChanged" />
+                                    <RadioButton x:Name="CapturesShots" Style="{StaticResource Segment}" Content="Screenshots" GroupName="CaptureFilter"
+                                                 MinWidth="40" Padding="9,3" Checked="OnCaptureFilterChanged" />
+                                    <RadioButton x:Name="CapturesVideos" Style="{StaticResource Segment}" Content="Recordings" GroupName="CaptureFilter"
+                                                 MinWidth="40" Padding="9,3" Checked="OnCaptureFilterChanged" />
                                 </StackPanel>
                             </Border>
-                        </StackPanel>
-                        <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="8,0,0,0">
-                            <Button Style="{StaticResource IconButton}" Content="&#xE72C;" ToolTip="Refresh"
-                                    Click="OnRefreshCaptures" AutomationProperties.Name="Refresh captures" />
-                            <Button Style="{StaticResource IconButton}" Content="&#xE838;" ToolTip="Open the capture folder"
-                                    Click="OnOpenCaptureFolder" AutomationProperties.Name="Open the capture folder" />
-                        </StackPanel>
+                            <StackPanel x:Name="CapturesToolsHost" Grid.Column="1" Orientation="Horizontal" Margin="10,0,10,0" HorizontalAlignment="Center"
+                                        RenderTransformOrigin="0.5,0.5">
+                                <StackPanel.RenderTransform>
+                                    <TranslateTransform x:Name="CapturesToolsSlide" Y="0" />
+                                </StackPanel.RenderTransform>
+                                <TextBox x:Name="CapturesSearchBox" Width="180" MinWidth="0" MaxWidth="180" Style="{StaticResource SearchBox}" Tag="Search captures"
+                                         TextChanged="OnCapturesSearchChanged" AutomationProperties.Name="Search captures" />
+                                <Border Style="{StaticResource SegmentTrack}" Margin="8,0,0,0">
+                                    <StackPanel Orientation="Horizontal">
+                                        <RadioButton x:Name="CapturesSortNewest" Style="{StaticResource Segment}" Content="Newest" GroupName="CaptureSort"
+                                                     IsChecked="True" MinWidth="40" Padding="8,3" Checked="OnCaptureSortChanged" />
+                                        <RadioButton x:Name="CapturesSortOldest" Style="{StaticResource Segment}" Content="Oldest" GroupName="CaptureSort"
+                                                     MinWidth="40" Padding="8,3" Checked="OnCaptureSortChanged" />
+                                        <RadioButton x:Name="CapturesSortLargest" Style="{StaticResource Segment}" Content="Largest" GroupName="CaptureSort"
+                                                     MinWidth="40" Padding="8,3" Checked="OnCaptureSortChanged" />
+                                    </StackPanel>
+                                </Border>
+                            </StackPanel>
+                            <StackPanel Grid.Column="2" Orientation="Horizontal" Margin="8,0,0,0">
+                                <Button Style="{StaticResource IconButton}" Content="&#xE72C;" ToolTip="Refresh"
+                                        Click="OnRefreshCaptures" AutomationProperties.Name="Refresh captures" />
+                                <Button Style="{StaticResource IconButton}" Content="&#xE838;" ToolTip="Open the capture folder"
+                                        Click="OnOpenCaptureFolder" AutomationProperties.Name="Open the capture folder" />
+                            </StackPanel>
+                        </Grid>
+                        <StackPanel x:Name="CapturesToolsWrap" Grid.Row="1" Orientation="Horizontal" Margin="0,8,0,0"
+                                    Visibility="Collapsed" HorizontalAlignment="Left" />
                     </Grid>
                     <ScrollViewer x:Name="CapturesScroller" Grid.Row="2" VerticalScrollBarVisibility="Auto" Padding="0,0,4,0">
                         <Grid>
@@ -1387,7 +1588,7 @@
                         <Button x:Name="ViewerNext" Style="{StaticResource ViewerNav}" Content="&#xE76C;" HorizontalAlignment="Right"
                                 ToolTip="Next (Right arrow)" AutomationProperties.Name="Next capture" Click="OnViewerNext" />
                     </Grid>
-                    <Grid x:Name="ViewerTransport" Grid.Row="2" Margin="14,0,18,14" Visibility="Collapsed">
+                    <Grid x:Name="ViewerTransport" Grid.Row="2" Margin="14,0,18,14" Visibility="Collapsed" MinWidth="0">
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="Auto" />
                             <ColumnDefinition Width="Auto" />
@@ -1419,33 +1620,46 @@
                             <StackPanel>
                                 <TextBlock Text="Save a clip" FontSize="14.5" FontWeight="SemiBold"
                                            Foreground="{StaticResource HudText}" />
-                                <TextBlock x:Name="ViewerClipFrom" FontSize="12" Foreground="{StaticResource HudTextDim}"
-                                           TextWrapping="Wrap" Margin="0,3,0,0" />
 
-                                <TextBlock Text="Length" FontSize="12" Foreground="{StaticResource HudTextDim}" Margin="0,16,0,2" />
-                                <Grid>
+                                <Grid Margin="0,16,0,0">
                                     <Grid.ColumnDefinitions>
                                         <ColumnDefinition Width="*" />
                                         <ColumnDefinition Width="Auto" />
                                     </Grid.ColumnDefinitions>
-                                    <Slider x:Name="ViewerClipLength" Style="{StaticResource ScrubSlider}" Minimum="2" Maximum="15"
-                                            Value="5" SmallChange="1" LargeChange="5" TickFrequency="1" IsSnapToTickEnabled="True"
-                                            AutomationProperties.Name="Length of the clip"
-                                            ValueChanged="OnViewerClipChanged" />
-                                    <TextBlock x:Name="ViewerClipLengthText" Grid.Column="1" MinWidth="34" Margin="10,0,0,0"
+                                    <TextBlock Text="In point" FontSize="12" Foreground="{StaticResource HudTextDim}" />
+                                    <TextBlock x:Name="ViewerClipInText" Grid.Column="1" MinWidth="46"
                                                FontFamily="{StaticResource MonoFont}" FontSize="11.5"
-                                               Foreground="{StaticResource HudText}" VerticalAlignment="Center"
-                                               HorizontalAlignment="Right" />
+                                               Foreground="{StaticResource HudText}" HorizontalAlignment="Right" />
                                 </Grid>
+                                <Slider x:Name="ViewerClipIn" Style="{StaticResource ScrubSlider}" Minimum="0" Maximum="1"
+                                        SmallChange="0.5" LargeChange="5" AutomationProperties.Name="Clip in point, seconds"
+                                        ValueChanged="OnViewerClipRangeChanged" />
+
+                                <Grid Margin="0,12,0,0">
+                                    <Grid.ColumnDefinitions>
+                                        <ColumnDefinition Width="*" />
+                                        <ColumnDefinition Width="Auto" />
+                                    </Grid.ColumnDefinitions>
+                                    <TextBlock Text="Out point" FontSize="12" Foreground="{StaticResource HudTextDim}" />
+                                    <TextBlock x:Name="ViewerClipOutText" Grid.Column="1" MinWidth="46"
+                                               FontFamily="{StaticResource MonoFont}" FontSize="11.5"
+                                               Foreground="{StaticResource HudText}" HorizontalAlignment="Right" />
+                                </Grid>
+                                <Slider x:Name="ViewerClipOut" Style="{StaticResource ScrubSlider}" Minimum="0" Maximum="1"
+                                        SmallChange="0.5" LargeChange="5" AutomationProperties.Name="Clip out point, seconds"
+                                        ValueChanged="OnViewerClipRangeChanged" />
+
+                                <TextBlock x:Name="ViewerClipLengthText" FontSize="12" Foreground="{StaticResource HudTextDim}"
+                                           Margin="0,6,0,0" />
 
                                 <TextBlock Text="Format" FontSize="12" Foreground="{StaticResource HudTextDim}" Margin="0,16,0,2" />
                                 <StackPanel Orientation="Horizontal">
                                     <RadioButton x:Name="ViewerClipGif" Style="{StaticResource HudTool}" GroupName="ViewerClipFormat"
-                                                 Width="56" Content="GIF" FontFamily="{StaticResource TextFont}" FontSize="12"
+                                                 MinWidth="56" Content="GIF" FontFamily="{StaticResource TextFont}" FontSize="12"
                                                  FontWeight="SemiBold" IsChecked="True" Checked="OnViewerClipChanged"
                                                  ToolTip="Plays anywhere, and is the larger file" AutomationProperties.Name="GIF" />
                                     <RadioButton x:Name="ViewerClipWebM" Style="{StaticResource HudTool}" GroupName="ViewerClipFormat"
-                                                 Width="64" Content="WebM" FontFamily="{StaticResource TextFont}" FontSize="12"
+                                                 MinWidth="64" Content="WebM" FontFamily="{StaticResource TextFont}" FontSize="12"
                                                  FontWeight="SemiBold" Checked="OnViewerClipChanged"
                                                  ToolTip="A fraction of the size, and needs a modern player" AutomationProperties.Name="WebM" />
                                 </StackPanel>
@@ -1489,7 +1703,7 @@
                         <Grid Grid.Column="1" Margin="12,0,6,0">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
-                                <ColumnDefinition Width="*" MaxWidth="170" />
+                                <ColumnDefinition Width="*" MaxWidth="170" MinWidth="0" />
                             </Grid.ColumnDefinitions>
                             <Border Style="{StaticResource SegmentTrack}" HorizontalAlignment="Left">
                                 <StackPanel Orientation="Horizontal">
@@ -1501,8 +1715,9 @@
                                                  MinWidth="40" Padding="8,2" FontSize="11.5" Checked="OnLogFilterChanged" />
                                 </StackPanel>
                             </Border>
-                            <TextBox x:Name="LogSearchBox" Grid.Column="1" MinWidth="40" Margin="8,0,0,0" Padding="8,3" FontSize="11.5"
-                                     TextChanged="OnLogFilterChanged" ToolTip="Filter the log" AutomationProperties.Name="Filter the log" />
+                            <TextBox x:Name="LogSearchBox" Grid.Column="1" MinWidth="0" Margin="8,0,0,0" Padding="8,3" FontSize="11.5"
+                                     TextChanged="OnLogFilterChanged" ToolTip="Filter the log" AutomationProperties.Name="Filter the log"
+                                     HorizontalAlignment="Stretch" />
                         </Grid>
                         <StackPanel Grid.Column="2" Orientation="Horizontal">
                             <Button Style="{StaticResource IconButton}" Content="&#xE8C8;" ToolTip="Copy"

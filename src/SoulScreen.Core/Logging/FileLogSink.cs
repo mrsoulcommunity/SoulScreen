@@ -1,4 +1,5 @@
 using System.Text;
+using SoulScreen.Core.Time;
 
 namespace SoulScreen.Core.Logging;
 
@@ -77,7 +78,7 @@ public sealed class FileLogSink : IDisposable
         _written = new FileInfo(_path).Length;
 
         _writer.WriteLine();
-        _writer.WriteLine($"=== SoulScreen started {DateTime.Now:yyyy-MM-dd HH:mm:ss} ===");
+        _writer.WriteLine($"=== SoulScreen started {TimestampFormatting.FormatDateTime(DateTime.Now, TimestampMode.Gregorian)} ===");
     }
 
     private void Write(LogEntry entry)

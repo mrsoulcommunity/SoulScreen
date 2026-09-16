@@ -98,6 +98,42 @@ public partial class MainWindow
         MiniMenu.Items.Add(item);
     }
 
+    // --------------------------------------------------------------------- presentation mode
+
+    /// <summary>True while presentation mode owns the fullscreen and focus transitions.</summary>
+    private bool _presentationMode;
+    private bool _presentationEnteredFullscreen;
+    private bool _presentationEnteredFocus;
+
+    /// <summary>Combines fullscreen and focus mode for presenting or teaching. It remembers
+    /// which transitions it made, so leaving never undoes a state the user had already chosen.</summary>
+    private void OnPresentationMode(object sender, RoutedEventArgs e) => TogglePresentationMode();
+
+    private void TogglePresentationMode()
+    {
+        if (VideoHost.Visibility != Visibility.Visible)
+        {
+            ShowToast("Presentation mode is for when an iPhone is on screen", "\uE7B3");
+            return;
+        }
+
+        if (_presentationMode)
+        {
+            _presentationMode = false;
+            if (_presentationEnteredFocus && _focusMode) SetFocusMode(false);
+            if (_presentationEnteredFullscreen && _isFullscreen) ToggleFullscreen();
+            ShowToast("Presentation mode ended", "\uE7B3");
+            return;
+        }
+
+        _presentationMode = true;
+        _presentationEnteredFullscreen = !_isFullscreen;
+        _presentationEnteredFocus = !_focusMode;
+        if (_presentationEnteredFullscreen) ToggleFullscreen();
+        if (_presentationEnteredFocus) SetFocusMode(true);
+        ShowToast("Presentation mode · Ctrl+Shift+P to leave", "\uE7B3");
+    }
+
     // --------------------------------------------------------------------- focus mode
 
     /// <summary>True while only the picture is showing: no toolbar, no status bar.</summary>
@@ -132,9 +168,15 @@ public partial class MainWindow
         SetFocusMode(!_focusMode);
     }
 
-    /// <summary>Sessions end; focus mode would leave an empty black window behind one.</summary>
+    /// <summary>Sessions end; focus mode would leave an empty black window behind one, and the
+    /// fullscreen presentation mode entered would still be running.</summary>
     private void LeaveFocusModeForSessionEnd()
     {
-        if (_focusMode && !_shuttingDown) SetFocusMode(false);
+        // Clear presentation mode first so a session end mid-presentation does not leave the
+        // window in a state the user can no longer describe or undo through Ctrl+Shift+P.
+        _presentationMode = false;
+        _presentationEnteredFullscreen = false;
+        _presentationEnteredFocus = false;
+        if (!_shuttingDown && _focusMode) SetFocusMode(false);
     }
 }

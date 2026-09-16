@@ -39,14 +39,16 @@ public partial class MainWindow
     {
         ["RECEIVER"] = ("Receiver", "", "NavBlue", "airplay name port resolution"),
         ["APPEARANCE"] = ("Appearance", "", "NavPurple", "theme dark light colour color accent"),
+        ["REGIONAL"] = ("Regional", "", "NavTeal", "language locale persian shamsi calendar fa-IR dates date time timezone"),
         ["PICTURE"] = ("Picture", "", "NavGreen", "video display screen graph"),
         ["AUDIO"] = ("Audio", "", "NavPink", "sound speakers"),
         ["WHEN A PHONE CONNECTS"] = ("When a phone connects", "", "NavOrange", "automatic connect session"),
         ["PRIVACY"] = ("Privacy", "\uEA18", "NavRed", "privacy ask approve allow block trust permission security"),
         ["SCREENSHOTS AND RECORDINGS"] = ("Captures", "", "NavIndigo", "screenshot recording capture folder budget storage"),
-        ["WINDOW AND SYSTEM"] = ("Window and system", "", "NavGraphite", "tray startup notification displays animations monitor"),
-        ["RECENT IPHONES"] = ("Recent iPhones", "", "NavTeal", "history devices phones"),
-        ["ABOUT"] = ("About", "", "NavGray", "version log folder data reset shortcuts fairplay ffmpeg identity"),
+        ["WINDOW AND SYSTEM"] = ("Window and system", "\uE737", "NavGraphite", "tray startup notification displays animations monitor"),
+        ["RECENT IPHONES"] = ("Recent iPhones", "\uE81C", "NavTeal", "history devices phones"),
+        ["UPDATES"] = ("Updates", "\uEB52", "NavCyan", "update version release download install upgrade github"),
+        ["ABOUT"] = ("About", "\uE946", "NavGray", "version log folder data reset shortcuts fairplay ffmpeg identity"),
     };
 
     private void InitialiseSettingsNav()
@@ -329,6 +331,7 @@ public partial class MainWindow
         _settings.Accent = accent;
         _settings.Save();
         ThemeManager.Apply(_settings.Theme, accent, animate: true);
+        SaveActiveDeviceProfile();
 
         _populatingSettings = true;
         try { SyncAccentSwatches(); }

@@ -99,6 +99,9 @@ public partial class MainWindow
         PositionOverlays();
         UpdatePictureCorners();
         UpdateTaskbar();
+        // The picture settles into its small window with the same eased move every other
+        // mode change uses, so shrinking reads as one motion rather than a teleport.
+        Dispatcher.InvokeAsync(() => TransitionContentForModeChange(entering: true), DispatcherPriority.Loaded);
     }
 
     private void ExitMiniPlayer()
@@ -146,6 +149,7 @@ public partial class MainWindow
         UpdateTaskbar();
         // The control bar comes back at a different width; fit it once the layout has settled.
         Dispatcher.InvokeAsync(UpdateControlBar, DispatcherPriority.Loaded);
+        Dispatcher.InvokeAsync(() => TransitionContentForModeChange(entering: false), DispatcherPriority.Loaded);
     }
 
     /// <summary>
