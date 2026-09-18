@@ -305,8 +305,6 @@ public partial class MainWindow : Window
         _receiver.VideoFormatChanged += OnVideoFormatChanged;
         _pipeline?.Attach(_receiver);
         _audio?.Attach(_receiver);
-        // Sets the tile budget from EnableMultiDevice before StartAsync can accept sessions.
-        ////InitialiseMultiDevice(_receiver);
 
         try
         {
@@ -336,7 +334,6 @@ public partial class MainWindow : Window
             receiver.StateChanged -= OnReceiverStateChanged;
             receiver.VideoFormatChanged -= OnVideoFormatChanged;
             await receiver.DisposeAsync();
-            ////DisposeMultiDevice();
         }
 
         var demo = _demo;
@@ -411,7 +408,7 @@ public partial class MainWindow : Window
         if (_demo is not null)
         {
             // Ending the demo puts the receiver back, which is what was running before it.
-            _ = EndDemoAsync();
+            DisconnectDemoAsync();
             return;
         }
 
@@ -477,6 +474,14 @@ public partial class MainWindow : Window
 
     /// <summary>Whether the receiver was running when the demo replaced it.</summary>
     private bool _resumeReceiverAfterDemo;
+
+    /// <summary>Fire-and-forget wrapper for <see cref="EndDemoAsync"/> that catches exceptions
+    /// instead of letting them crash the process.</summary>
+    private async void DisconnectDemoAsync()
+    {
+        try { await EndDemoAsync(); }
+        catch (Exception ex) { _log.Warn("demo disconnect failed", ex); }
+    }
 
     /// <summary>Ends the demo and brings the receiver back, if it was running before.</summary>
     private async Task EndDemoAsync()
@@ -681,9 +686,9 @@ public partial class MainWindow : Window
             ThemeManager.Apply(_settings.Theme, _settings.Accent, animate: true);
             ApplyPictureSettings();
             SyncPictureControls();
-            _populatingSettings = true;
+            BeginPopulateSettings();
             try { SyncAccentSwatches(); }
-            finally { _populatingSettings = false; }
+            finally { EndPopulateSettings(); }
         }
 
         return profile.AutoRecord;
@@ -1165,7 +1170,9 @@ public partial class MainWindow : Window
         _aspectLock?.Dispose();
         _hotkeys?.Dispose();
         _laserTimer?.Stop();
+        _laserTimer = null;
         _snapTimer?.Stop();
+        _snapTimer = null;
         DisposeUpdates();
         StopViewerMedia();
         Video.Dispose();
@@ -1178,7 +1185,21 @@ public partial class MainWindow : Window
             clipExport.Cancel();
             if (_clipExportTask is { } task)
             {
-                try { await task; } catch (Exception ex) { _log.Warn("clip export did not stop cleanly", ex); }
+                try
+                {
+                    // Give ffmpeg a few seconds to finish; hanging here would block the
+                    // shutdown indefinitely if the encode process is stuck.
+                    var completed = await Task.WhenAny(task, Task.Delay(TimeSpan.FromSeconds(5)));
+                    if (completed != task)
+                    {
+                        _log.Warn("clip export did not finish within the shutdown timeout");
+                    }
+                    else
+                    {
+                        await task; // observe exceptions
+                    }
+                }
+                catch (Exception ex) { _log.Warn("clip export did not stop cleanly", ex); }
             }
         }
 

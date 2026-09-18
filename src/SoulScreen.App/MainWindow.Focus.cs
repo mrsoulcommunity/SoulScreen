@@ -145,15 +145,13 @@ public partial class MainWindow
         _focusMode = on;
 
         // Focus mode only ever hides the strips; it leaves fullscreen and the mini player's
-        // own state alone, so leaving it puts back whatever view it was asked over. The mini
-        // player keeps its strips hidden in its own right, and fullscreen brings them back
-        // with its auto-hide on the next pointer move.
-        var visible = !on && !_isMiniPlayer;
+        // own state alone, so turning it off only brings the strips back if neither of those
+        // still wants them hidden - both keep the strips gone in their own right.
+        var visible = !on && !_isMiniPlayer && !_isFullscreen;
         Toolbar.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         StatusBar.Visibility = visible ? Visibility.Visible : Visibility.Collapsed;
         ApplyChromePadding();
         PositionOverlays();
-        if (!on && _isFullscreen) ShowChrome();
         if (on) ShowToast("Focus mode - press Ctrl+H to bring the chrome back", "\uE7B3");
     }
 

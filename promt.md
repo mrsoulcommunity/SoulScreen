@@ -1,6 +1,6 @@
 # SoulScreen — Feature Implementation Prompts
 
-Two production-ready prompts for AI coding agents (Claude Code, OpenCode, Codex, …).
+Three production-ready prompts for AI coding agents (Claude Code, OpenCode, Codex, …).
 Each prompt is **self-contained** and **grounded in the current codebase** — verified facts
 about existing files, types, and behavior are inline so the agent does not have to re-discover
 them.
@@ -19,6 +19,7 @@ them.
 
 1. [Feature 1 — Multi-Device Grid Mirroring](#feature-1--multi-device-grid-mirroring)
 2. [Feature 2 — Persian (Shamsi) + Gregorian Timestamps](#feature-2--persian-shamsi--gregorian-timestamps)
+3. [Feature 3 — Audience Window (second display for the room)](#feature-3--audience-window-second-display-for-the-room)
 
 ---
 
@@ -366,7 +367,222 @@ written. Do not re-derive them — start from them.
 
 ---
 
-## General conventions for both prompts
+## Feature 3 — Audience Window (second display for the room)
+
+### Goal
+
+A **second, chrome-free window** that mirrors the live picture onto a projector or a
+second monitor while every control — markup, recording, fit, volume — stays on the
+laptop in front of the teacher. One keystroke (`Ctrl+Shift+D`) opens it; closing it
+costs nothing while it is shut. Built for classrooms, demos and meetings: the room
+looks at the wall, the presenter keeps the tools.
+
+### Context (project ground truth — verified)
+
+You are working on **SoulScreen** — an iPhone-to-Windows 11 mirroring receiver
+(.NET 8 / WPF, C#). Source root: `D:\Project\App-SoulScreen`. The following facts
+were verified directly from the repository before this prompt was written. Do not
+re-derive them — start from them.
+
+| Fact | Verified location |
+|---|---|
+| Receive path lives behind `IMirrorSource` | `src/SoulScreen.Core/Sources/IMirrorSource.cs` |
+| Decoded frames are raised **once**, with ownership transferred | `src/SoulScreen.Media/VideoPipeline.cs` — the `FrameDecoded` event; its doc comment states "The handler takes ownership of the frame and must dispose it when done" |
+| The one consumer today | `src/SoulScreen.App/MainWindow.xaml.cs:608` — `OnFrameDecoded(object? sender, DecodedVideoFrame frame) => Video.Present(frame);` |
+| Frame buffers come from `ArrayPool`, `Rent` is **internal to SoulScreen.Media**, `Dispose` is idempotent (`Interlocked.Exchange`) | `src/SoulScreen.Media/DecodedVideoFrame.cs` |
+| The picture surface: one `WriteableBitmap` per geometry, `TryLock(3 ms)`, frames queued by an internal `FramePacer`, `Present` safe from any thread | `src/SoulScreen.App/Rendering/VideoSurface.cs` (allocate at `:178`, `Snapshot()` frozen copy at `:326`) |
+| A second independent consumer of the same pipeline pattern **already exists and works** | `src/SoulScreen.App/Controls/TileHost.xaml.cs` — own `VideoSurface`, own pacing, fixed `PresentationDelay = TimeSpan.FromMilliseconds(50)` at `:61`, `Video.Present(frame)` at `:182` |
+| Monitor enumeration and placement are done and tested | `src/SoulScreen.App/DisplayService.cs` (`ListChoices(Window)`, `VirtualDesktop`, `MoveTo`) + `src/SoulScreen.App/Logic/DisplayLayout.cs` (`PlacementFor`, `Resolve`, `IsOnDisplay`) |
+| `Ctrl+Shift` is taken by **C** (copy shot), **M** (mini player), **P** (presentation mode), **R** (rotate); `Ctrl+Shift+D` is free | `src/SoulScreen.App/MainWindow.Chrome.cs:518-523` |
+| The name **"Presentation mode" is taken** — it is fullscreen+focus (`Ctrl+Shift+P`) | `src/SoulScreen.App/MainWindow.Focus.cs:112` `TogglePresentationMode`; palette entry `MainWindow.Commands.cs:301` |
+| Command palette entries are `yield return new(title, group, glyph, shortcut, action, keywords)` | `src/SoulScreen.App/MainWindow.Commands.cs` |
+| Display choice is a string setting: `"current"`, `"primary"`, or an index as text | `src/SoulScreen.App/AppSettings.cs` — `TargetDisplay` beside `WindowLeft` (`:446-453`) |
+| Settings import is an **explicit whitelist** — anything not listed in `ApplyImported` stays machine-local | `src/SoulScreen.App/Logic/SettingsTransfer.cs` |
+| Markup is an `InkCanvas` | `src/SoulScreen.App/MainWindow.Markup.cs` (`EditingMode` at `:330-332`, stroke collection at `:423`); declared `MainWindow.xaml:308` |
+| Multi-device grid has its **own** pipelines per tile | `src/SoulScreen.App/MainWindow.MultiDevice.cs` + `TileHost` |
+| The demo source emits through the same `IMirrorSource` — everything here is testable with no phone | `src/SoulScreen.Media/DemoSource.cs:99` |
+| Session teardown clears the main surface | `src/SoulScreen.App/MainWindow.xaml.cs:869` `Video.Clear()` |
+| Test suite | `dotnet test` — 406 passing at the time this prompt was written (README badge) |
+| `LangVersion` 12, nullable on, no new packages | `Directory.Build.props` |
+
+### Strategy — one copy, not a second decoder
+
+The pipeline hands each decoded frame to **one** owner, and the owner disposes it.
+So a second window cannot simply subscribe a second decoder-facing handler and take
+the same frame. Choose the strategy below; the alternatives were considered and
+rejected:
+
+| Option | Verdict |
+|---|---|
+| **A. A frame tap that copies (chosen)** | A small class in `SoulScreen.Media` subscribes to `FrameDecoded`, memcpy's the pixels into a fresh `ArrayPool` buffer **synchronously on the decode thread**, and raises the copy for the audience window's own `VideoSurface`. ~1 ms per 1080p frame, only while the window is open. No protocol, decoder or pipeline changes. |
+| B. Second `VideoPipeline` on the same `IMirrorSource` | Rejected: a second decode of every frame — double CPU, and two decoders can disagree mid-session. Also doubles the work `FrameDecoded`'s ownership rule forbids. |
+| C. `VideoSurface.Snapshot()` per frame on the UI thread | Rejected: a frozen 8 MB `WriteableBitmap` copy on the UI thread sixty times a second (`VideoSurface.cs:326` is per-call) — exactly the cost the pipeline's own doc comment warns sank the decode thread once. |
+| D. Shared D3D surface / `D3DImage` | Rejected for this prompt: native interop work and no precedent in the repo; revisit only if Option A's measured cost exceeds its budget. |
+
+### Functional requirements
+
+1. **Open, close, remember.** `Ctrl+Shift+D` toggles the audience window; the command
+   palette lists **"Audience window"** (group *Window*, keywords "audience projector
+   second display teaching class screen wall") with the same shortcut. The F1 list and
+   Settings → Keyboard shortcuts gain the row. Window placement (Left/Top/Width/Height)
+   is remembered in settings and restored; **openness is not** — a ghost window on the
+   projector after a reboot is worse than one keystroke.
+
+2. **What it shows.** The live picture of the active session, `Stretch.Uniform`, in a
+   borderless window with no chrome of its own. Hovering reveals exactly two small
+   buttons: fullscreen (`F11` also works) and close. `Esc` leaves fullscreen first;
+   a second `Esc` does nothing else (the main window keeps its own Esc semantics).
+   `ShowInTaskbar=false` — the main window stays the app's taskbar identity.
+
+3. **Zero cost while closed.** No subscription, no copies, no allocations per frame.
+   `FrameTap` exposes a copied-frames counter so a test (and the activity log) can
+   prove zero while closed.
+
+4. **The tap contract.** `src/SoulScreen.Media/FrameTap.cs`:
+   - Subscribes to `VideoPipeline.FrameDecoded`; subscribes **before** the main
+     window's existing handler and copies synchronously, so the source buffer is
+     intact regardless of when the pacer disposes it.
+   - The copy is a fresh `DecodedVideoFrame` via the internal `Rent` (same over-
+     allocation behaviour as the existing path), `TimestampUs` preserved; `Dispose`
+     of the inbound frame remains the existing consumer's job, untouched.
+   - Hands the copy straight to its consumer (`FrameCopied`, raised on the decode
+     thread, consumer takes ownership and must dispose). There is no second queue:
+     the audience surface's own `FramePacer` cushion is the only buffering, and a
+     slow projector surface drops frames there rather than back-pressuring decode.
+   - `TotalCopyMicroseconds` and `FramesCopied` counters, reset per session.
+
+5. **Independent pacing.** The audience surface runs its own `VideoSurface` with the
+   fixed 50 ms delay `TileHost` uses — **not** `AppSettings.PresentationDelayFor`:
+   that couples the main picture's delay to the audio reserve, and the audience
+   window is silent. Latency measured on its surface starts at the copy; note this
+   in a doc comment so nobody "fixes" the number twice.
+
+6. **Pause is global across both windows.** `Space` (which sets `Video.IsFrozen` in
+   the main window's pause path) freezes the audience surface too, in the same method.
+   A presenter pausing to point at a still must see the same still on the wall.
+   Markup drawing on a paused picture must appear on both.
+
+7. **Display choice.** The settings card lists `DisplayService.ListChoices` entries
+   ("1 (primary)", …). The pure decision — resolve the choice string, fall back to
+   primary when the index no longer exists, null when the list is empty — lives in
+   **`src/SoulScreen.App/Logic/AudienceDisplay.cs`**, WPF-free, in the house style of
+   `Logic/DisplayLayout.cs`, and is what the window calls on open and on
+   `SystemEvents.DisplaySettingsChanged`-style monitor changes. A monitor that is
+   unplugged mid-show moves the window to the fallback with one toast and is not
+   asked about again. Placement math itself is `DisplayLayout.PlacementFor`, using
+   the **audience window's own DPI** (`ListChoices` takes the window it measures for —
+   pass the audience window, not the main one).
+
+8. **Session lifecycle.** Opening with no session shows the same idle placeholder the
+   main window shows. A session ending does **not** close the audience window: it
+   holds the last frame with a small "Session ended" chip, so the room never sees a
+   desktop mid-lesson; closing it stays manual. A phone that drops and resumes inside
+   the reconnect minute keeps the wall picture continuous. Closing the audience
+   window never touches the session, the recording, or the main window.
+
+9. **Markup mirroring.** The audience window hosts a read-only `InkCanvas`
+   (`EditingMode=None`) that mirrors the main window's `MarkupCanvas.Strokes` via
+   stroke-collection change events, cleared and erased together, so pen and
+   highlighter reach the projector. The laser pointer's fade is reproduced as closely
+   as the mirrored collection allows — if timed fade strokes cannot be mirrored
+   faithfully, mirror them as ordinary strokes and say so in the README. A settings
+   toggle **"Mirror markup to the audience window"** (default on) gates it.
+
+10. **Machine-local by construction.** The audience display choice and placement are
+    **not added** to `SettingsTransfer.ApplyImported` — the whitelist makes them local
+    automatically, the same policy the window place already follows. A test pins this:
+    importing settings must not move the audience window.
+
+11. **Scope guards.** Single-device sessions only: in grid mode the command toasts
+    "The audience window follows the main picture — not available in grid mode" and
+    does nothing (grid tiles have their own pipelines). Works with the demo source —
+    every logic path is exercisable with no phone. The audience window captures
+    nothing of its own: screenshots and recordings keep coming from the main
+    surface, and its statistics never enter the `Ctrl+I` overlay.
+
+12. **Performance budget.** Copy ≤ 1.5 ms per 1080p frame on the decode thread; the
+    audience surface ≥ 55 fps at 1080p60 on the reference hardware; the main window's
+    presented-fps, read from its own `VideoSurface`, changes by no more than 2 fps
+    with the window open. Extra RAM ~40-70 MB (cushion + bitmap). Record measured
+    numbers in the manual checklist.
+
+### Architectural constraints (non-negotiable)
+
+- **`VideoPipeline.cs`, `SessionRecorder`, `IMirrorSource` and `VideoSurface` are not
+  modified.** Everything new is additive: `FrameTap`, `Logic/AudienceDisplay.cs`,
+  `AudienceWindow.xaml(.cs)`, a `MainWindow.Audience.cs` partial, settings fields.
+- **Naming.** The feature is the **"Audience window"** everywhere a user can read it.
+  "Presentation mode" is taken (`MainWindow.Focus.cs:112`) and must not be reused or
+  overloaded.
+- `FrameTap` lives in `SoulScreen.Media` because `DecodedVideoFrame.Rent` is internal
+  to that assembly; it must stay free of WPF so it is testable headlessly.
+- **No new third-party dependencies.** `System.Windows.Forms.Screen` via the existing
+  `DisplayService`, `PersianCalendar`-style stdlib-only rules apply.
+- Match the house C# style exactly: file-scoped namespaces, `sealed` where it fits,
+  doc comments that say **why**, WPF-free `Logic/`. New code compiles warning-clean
+  (`TreatWarningsAsErrors` is currently off — keep it that way, don't flip it).
+- The audience window's theming follows the app theme (accent and light/dark), so the
+  chip and hover buttons do not look bolted on.
+
+### Deliverables (in this order)
+
+1. `src/SoulScreen.Media/FrameTap.cs` + `tests/SoulScreen.Tests/FrameTapTests.cs`
+   (≥ 6 tests): copy independence (mutate the source buffer after the tap; the copy
+   holds the old pixels), dispose safety (disposing the inbound frame does not
+   corrupt an undelivered copy), zero copies while unsubscribed, ownership passes to
+   the consumer (the copy is disposed exactly once by the consumer), counters, and
+   back-pressure (a consumer that never drains does not grow anything unboundedly).
+2. `src/SoulScreen.App/Logic/AudienceDisplay.cs` + tests (≥ 4): valid index resolves;
+   out-of-range index falls back to primary; `"primary"` and `"current"` behave as
+   documented; empty display list yields null.
+3. `src/SoulScreen.App/AudienceWindow.xaml(.cs)`: borderless window, own `VideoSurface`,
+   mirrored `InkCanvas`, hover chrome, `F11`/`Esc`, session-end chip, DPI-correct
+   placement through `DisplayService`/`DisplayLayout`.
+4. `src/SoulScreen.App/MainWindow.Audience.cs` partial: tap lifecycle (subscribe on
+   open, unsubscribe on close), open/close, hotkey, palette entry, grid-mode guard,
+   session open/end/reconnect hooks, freeze-both-pauses wiring, monitor-change
+   fallback with toast, activity-log lines ("audience window opened on display 2"…).
+5. Settings: fields in `AppSettings.cs` beside the other window settings
+   (`AudienceDisplay`, `AudienceWindowLeft/Top/Width/Height`), the card under
+   **Settings → Window and system** (display dropdown, Open/Close, markup-mirror
+   toggle), search-indexed like every other card, and **nothing added to
+   `SettingsTransfer.ApplyImported`** (with the pinning test).
+6. README: a short **Audience window** subsection under Usage, the `Ctrl+Shift+D` row
+   in the shortcut table, and one line in the Status table. Manual test checklist
+   (≤ 80 lines) saved at `artifacts/testbuild/audience-window-manual-checklist.md`:
+   1-phone regression · open on display 2 · fullscreen/Esc · markup mirrored ·
+   pause freezes both · session drop mid-show (chip, no desktop) · reconnect
+   continuity · demo pattern with no phone · unplugged-monitor fallback · close
+   during recording (recording unaffected) · fps numbers from `Ctrl+I` with the
+   window open and closed.
+
+### Out of scope
+
+- Grid/multi-device audience views (tiles have their own pipelines).
+- Audio on the audience window (the room hears the laptop, by design, via its own
+  output device).
+- More than one audience window; capturing **from** the audience window; virtual
+  camera or RTMP (separate prompts if ever).
+- Making the audience window always-on-top or resizable-chrome'd.
+
+### Definition of done
+
+- `dotnet build` clean with **no new warnings**; `dotnet test` — all existing tests
+  (406 at the time of writing) plus the new ones pass.
+- With the audience window closed: the tap is unsubscribed, `FramesCopied` stays at
+  zero across a full session (tested), and the main window's fps is unchanged within
+  measurement noise.
+- With it open on the reference hardware: ≥ 55 fps on the audience surface at
+  1080p60, copy cost within budget, numbers recorded in the manual checklist.
+- Every behaviour above demonstrated with the **demo pattern and no phone attached**
+  — the whole feature is verifiable in CI-like conditions except raw fps.
+- Manual checklist executed against the iPhone 17 Pro / iOS 26 setup; results in
+  `artifacts/testbuild/audience-window-manual-YYYYMMDD.md`.
+- Activity log (`Ctrl+L`) shows no warnings on a clean open/serve/close cycle.
+
+---
+
+## General conventions for every prompt
 
 - **No new dependencies** without an explicit `// Approved:` comment in the
   PR description.

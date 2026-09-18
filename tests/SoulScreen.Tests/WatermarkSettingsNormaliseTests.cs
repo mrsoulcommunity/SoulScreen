@@ -96,3 +96,29 @@ public class WatermarkSettingsNormaliseTests
         Assert.NotNull(settings.Watermark);
     }
 }
+
+/// <summary>Defensive clamping in <see cref="AppSettings.Normalise"/> for the favorite
+/// captures list - a hand-edited settings.json with blanks or duplicates settles down to
+/// one clean entry per path, and never crashes normalisation.</summary>
+public class FavoriteCapturesNormaliseTests
+{
+    [Fact]
+    public void ANullFavoritesListBecomesEmptyRatherThanNull()
+    {
+        var settings = new AppSettings { FavoriteCaptures = null! };
+        settings.Normalise();
+        Assert.NotNull(settings.FavoriteCaptures);
+        Assert.Empty(settings.FavoriteCaptures);
+    }
+
+    [Fact]
+    public void BlanksAndDuplicatesAreFoldedDown()
+    {
+        var settings = new AppSettings
+        {
+            FavoriteCaptures = ["C:/c/a.png", "", "  ", "C:/c/A.PNG", "C:/c/b.png"],
+        };
+        settings.Normalise();
+        Assert.Equal(2, settings.FavoriteCaptures.Count);
+    }
+}

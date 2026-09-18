@@ -282,7 +282,15 @@ public partial class MainWindow
             }
         }
 
-        yield return new("Captures", "Go to", "", "Ctrl+G", ShowCaptures, "gallery screenshots recordings photos videos library");
+        yield return new("Captures", "Go to", "\uEAB9", "Ctrl+G", ShowCaptures, "gallery screenshots recordings photos videos library");
+        if (_settings.FavoriteCaptures.Count > 0)
+        {
+            yield return new("Favorite captures", "Go to", "\uE734", null, () =>
+            {
+                ShowCaptures();
+                CapturesFavorites.IsChecked = true;
+            }, "starred favourites saved gallery");
+        }
         yield return new("Settings", "Go to", "", "Ctrl+,", () => SettingsButton.IsChecked = true, "preferences options");
         yield return new(LogPanel.Visibility == Visibility.Visible ? "Hide the activity log" : "Activity log", "Go to", "", "Ctrl+L",
             () => LogButton.IsChecked = LogButton.IsChecked != true, "log debug trace diagnostics");

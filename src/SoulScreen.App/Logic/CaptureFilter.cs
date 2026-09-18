@@ -29,15 +29,18 @@ internal static class CaptureFilter
     /// <para>
     /// The kind of capture counts as part of its name: "rec" finds recordings and "shot"
     /// finds screenshots even though neither word appears in the file name itself, which
-    /// is how people actually look for them.
+    /// is how people actually look for them. A favorite likewise answers to "favorite" or
+    /// "star", so "favorite rec" narrows to starred recordings the same way "rec 5" narrows
+    /// to a time.
     /// </para>
     /// </summary>
-    public static bool Matches(string fileName, string query)
+    public static bool Matches(string fileName, string query, bool isFavorite = false)
     {
         var terms = query.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries);
         if (terms.Length == 0) return true;
 
         var kindWords = KindWords(fileName);
+        if (isFavorite) kindWords = [.. kindWords, "favorite", "favorites", "favourite", "favourites", "star", "starred"];
         var kindText = string.Join(" ", kindWords);
         foreach (var term in terms)
         {

@@ -218,12 +218,15 @@ public sealed unsafe class H264Decoder : IDisposable
             _scaler = null;
         }
 
-        // The geometry does not change here - this is a colour conversion, not a resize -
-        // so the cheapest kernel is also the exact one.
+        // Luma keeps its exact geometry here - this is a colour conversion, not a resize -
+        // but chroma does not: 4:2:0 is half resolution, and BGRA needs it upsampled two-for-
+        // one regardless. Bilinear rather than point sampling is what keeps that upsampling
+        // from reading into the padding column an unaligned crop leaves just past the
+        // picture's true edge. See ColourSpace.SwsBilinear.
         _scaler = ffmpeg.sws_getContext(
             width, height, sourceFormat,
             width, height, AVPixelFormat.AV_PIX_FMT_BGRA,
-            ColourSpace.SwsPoint, null, null, null);
+            ColourSpace.SwsBilinear, null, null, null);
 
         if (_scaler is null)
         {

@@ -266,18 +266,6 @@ public sealed class AppSettings
     /// <summary>Accept the phone's audio as well as its screen.</summary>
     public bool EnableAudio { get; set; } = true;
 
-    /// <summary>
-    /// Mirror more than one iPhone at once into a grid of tiles. Off keeps today's
-    /// single-session behaviour exactly as it is - one phone takes the whole window, and a
-    /// second connecting takes the receiver over, as it always has.
-    /// </summary>
-    public bool EnableMultiDevice { get; set; }
-
-    /// <summary>Highest number of phones mirrored at once in multi-device mode, 2 to 4.
-    /// A session beyond the cap still mirrors - the phone knows no different - but it is
-    /// not offered a tile until one frees up.</summary>
-    public int MaxMirroredTiles { get; set; } = 4;
-
     /// <summary>Start advertising as soon as the app opens.</summary>
     public bool StartReceiverOnLaunch { get; set; } = true;
 
@@ -390,6 +378,13 @@ public sealed class AppSettings
     /// <summary>Most the capture folder may hold, in bytes. Zero means no budget, which is
     /// the default: the folder grows until the user prunes it.</summary>
     public long CaptureBudgetBytes { get; set; }
+
+    /// <summary>
+    /// Captures starred to keep - exempt from the storage budget's pruning, and quick to
+    /// find with the gallery's Favorites filter or a search for "favorite". Absolute paths,
+    /// matched case-insensitively; empty by default.
+    /// </summary>
+    public List<string> FavoriteCaptures { get; set; } = [];
 
     // ------------------------------------------------------------- on connecting
 
@@ -606,10 +601,6 @@ public sealed class AppSettings
         if (!Enum.IsDefined(ControlBarPlacement)) ControlBarPlacement = ControlBarPlacement.Floating;
         if (!Enum.IsDefined(ControlBarCorner)) ControlBarCorner = ControlBarCorner.BottomCentre;
 
-        // The tile budget is a hand-editable number; anything the grid cannot lay out reads
-        // as the four-tile maximum rather than zero phones mirrored.
-        if (MaxMirroredTiles is < 1 or > 4) MaxMirroredTiles = 4;
-
         // The free-position fractions are 0..1 against the picture's edges; anything else was
         // typed by hand into a settings file, or corrupted on the way in, and would place the
         // bar off-screen.
@@ -619,6 +610,9 @@ public sealed class AppSettings
         // A hand-edited budget can hold anything; negative and absurdly small values mean
         // "off" rather than "prune every capture the moment it is taken".
         if (CaptureBudgetBytes < 256L * 1024 * 1024) CaptureBudgetBytes = 0;
+
+        // A hand-edited or duplicated favorites list is folded down to one entry per path.
+        FavoriteCaptures = Logic.CaptureFavorites.Sanitise(FavoriteCaptures);
 
         // The display choice is "current", "primary" or a whole number a monitor answers to.
         if (TargetDisplay != DisplayLayout.CurrentDisplay

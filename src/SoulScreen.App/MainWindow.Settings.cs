@@ -20,9 +20,29 @@ namespace SoulScreen.App;
 /// </summary>
 public partial class MainWindow
 {
-    /// <summary>True while the form is being filled from settings, so the change handlers
-    /// do not read their own writes as edits.</summary>
-    private bool _populatingSettings;
+    /// <summary>
+    /// Nesting depth of settings-form population. A depth rather than a plain flag because the
+    /// helpers that fill in one card - <see cref="PopulateResolutionPresets"/>,
+    /// <see cref="SyncPictureControls"/>, <see cref="PopulateAudioDevices"/>,
+    /// <see cref="PopulateDisplayChoices"/>, <see cref="SyncCaptureBudget"/> - are called from
+    /// the method that fills in all the rest. With a flag, the first helper to finish cleared
+    /// it while <see cref="PopulateSettingsForm"/> was still assigning values, and every
+    /// assignment after that point ran as though the user had just made it: opening the
+    /// settings panel silently rewrote the picture-controls placement to "in a corner" (see
+    /// <see cref="SetCornerPlacement"/>) and re-applied other switches along with it.
+    /// </summary>
+    private int _populatingSettingsDepth;
+
+    /// <summary>True while the settings form is being filled in from the settings, so a
+    /// control's change handler knows the change is not the user's doing.</summary>
+    private bool _populatingSettings => _populatingSettingsDepth > 0;
+
+    private void BeginPopulateSettings() => _populatingSettingsDepth++;
+
+    private void EndPopulateSettings()
+    {
+        if (_populatingSettingsDepth > 0) _populatingSettingsDepth--;
+    }
 
     private static readonly (string Label, int Width, int Height, int Refresh)[] ResolutionPresets =
     [
@@ -75,7 +95,7 @@ public partial class MainWindow
 
     private void PopulateSettingsForm()
     {
-        _populatingSettings = true;
+        BeginPopulateSettings();
         try
         {
             NameBox.Text = _settings.DeviceName;
@@ -174,7 +194,7 @@ public partial class MainWindow
         }
         finally
         {
-            _populatingSettings = false;
+            EndPopulateSettings();
         }
     }
 
@@ -194,7 +214,7 @@ public partial class MainWindow
     private void SyncPictureControls()
     {
         if (FitFit is null) return;
-        _populatingSettings = true;
+        BeginPopulateSettings();
         try
         {
             FitFit.IsChecked = _settings.VideoFit == VideoFit.Fit;
@@ -206,7 +226,7 @@ public partial class MainWindow
         }
         finally
         {
-            _populatingSettings = false;
+            EndPopulateSettings();
         }
     }
 
@@ -397,9 +417,9 @@ public partial class MainWindow
     /// <summary>Moves a switch to match a setting changed elsewhere, without it reading as an edit.</summary>
     private void SyncCheck(CheckBox box, bool value)
     {
-        _populatingSettings = true;
+        BeginPopulateSettings();
         try { box.IsChecked = value; }
-        finally { _populatingSettings = false; }
+        finally { EndPopulateSettings(); }
     }
 
     private void OnLatencyChanged(object sender, RoutedEventArgs e)
@@ -529,7 +549,7 @@ public partial class MainWindow
             items.Add($"Display {i + 1}{(d.IsPrimary ? " (primary)" : "")} - {(int)d.WorkArea.Width}x{(int)d.WorkArea.Height}");
         }
 
-        _populatingSettings = true;
+        BeginPopulateSettings();
         try
         {
             DisplayBox.ItemsSource = items;
@@ -543,7 +563,7 @@ public partial class MainWindow
         }
         finally
         {
-            _populatingSettings = false;
+            EndPopulateSettings();
         }
         _displayChoices = displays;
     }
@@ -591,9 +611,9 @@ public partial class MainWindow
 
     private void OnRefreshAudioDevices(object sender, RoutedEventArgs e)
     {
-        _populatingSettings = true;
+        BeginPopulateSettings();
         try { PopulateAudioDevices(); }
-        finally { _populatingSettings = false; }
+        finally { EndPopulateSettings(); }
     }
 
     private void OnAudioDeviceChanged(object sender, SelectionChangedEventArgs e)
@@ -649,7 +669,7 @@ public partial class MainWindow
         if (index < ResolutionPresets.Length)
         {
             var preset = ResolutionPresets[index];
-            _populatingSettings = true;
+            BeginPopulateSettings();
             try
             {
                 WidthBox.Text = preset.Width.ToString(CultureInfo.InvariantCulture);
@@ -658,7 +678,7 @@ public partial class MainWindow
             }
             finally
             {
-                _populatingSettings = false;
+                EndPopulateSettings();
             }
             CustomResolutionRow.Visibility = Visibility.Collapsed;
         }

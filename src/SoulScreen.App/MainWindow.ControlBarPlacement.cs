@@ -31,26 +31,70 @@ public partial class MainWindow
     /// <summary>
     /// Picks the right margin, alignment and visibility for the floating <see cref="ControlBar"/>
     /// and shows or hides its docked twin based on the chosen placement.
+    /// <para>
+    /// The caption strip has to hold the app's own buttons, the window controls and the picture
+    /// controls at once, and at a phone's width there is no room for all three. When there is
+    /// not, the docked bar stands down and the floating one - which fits itself to the picture
+    /// by collapsing what can be reached another way - takes over, so no control is ever lost
+    /// off the side of a narrow window.
+    /// </para>
     /// </summary>
     private void ApplyControlBarPlacement()
     {
         var placement = _settings?.ControlBarPlacement ?? ControlBarPlacement.Floating;
 
-        if (placement == ControlBarPlacement.Docked)
+        if (placement == ControlBarPlacement.Docked && DockedControlBarWanted && DockedControlBarFits())
         {
             ControlBar.Visibility = Visibility.Collapsed;
-            ControlBarDocked.Visibility = VideoHost.Visibility == Visibility.Visible && !_isMiniPlayer
-                ? Visibility.Visible : Visibility.Collapsed;
+            ControlBarDocked.Visibility = Visibility.Visible;
             SyncDockedBar();
             return;
         }
 
         ControlBarDocked.Visibility = Visibility.Collapsed;
 
-        if (ControlBar.Visibility != Visibility.Visible) return;
-        // Floating, corner and free are all the same bar - just parked differently.
+        if (!ControlBarWanted)
+        {
+            ControlBar.Visibility = Visibility.Collapsed;
+            return;
+        }
+
+        // Visible even though the placement asks for the caption strip: this is the fallback
+        // path, and it is the only way to reach the picture controls at this width. Revealed
+        // as well as shown, so a window narrowed under the pointer does not simply lose its
+        // controls until the pointer happens to move again.
+        ControlBar.Visibility = Visibility.Visible;
         PositionFloatingControlBar();
         ApplyCompactMode();
+        RevealControlBar();
+    }
+
+    /// <summary>Whether a picture worth controlling is on screen - the same condition that has
+    /// always decided the docked bar's visibility. Focus mode, fullscreen and the mini player
+    /// hide the strip it lives in anyway, so it needs no rule of its own for those.</summary>
+    private bool DockedControlBarWanted =>
+        VideoHost.Visibility == Visibility.Visible && !_isMiniPlayer && !_isFullscreen;
+
+    /// <summary>
+    /// True when the caption strip can hold the docked picture controls beside everything else
+    /// already in it. The bar is measured unconstrained because a collapsed element reports no
+    /// size at all, and the identity block is left a floor of room so a long receiver name
+    /// cannot be the thing that pushes the bar off the edge - it ellipsises instead.
+    /// </summary>
+    private bool DockedControlBarFits()
+    {
+        if (ToolbarActions is null || CaptionButtons is null) return false;
+
+        // Identity block's own margin (10), the strip's left margin (14) and enough for the
+        // status dot, a couple of letters and the timer.
+        const double identityFloor = 110;
+
+        ControlBarDocked.Visibility = Visibility.Visible;
+        ControlBarDocked.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        var wanted = ControlBarDocked.DesiredSize.Width;
+        var room = ActualWidth - ToolbarActions.ActualWidth - CaptionButtons.ActualWidth - identityFloor;
+
+        return wanted <= room;
     }
 
     /// <summary>

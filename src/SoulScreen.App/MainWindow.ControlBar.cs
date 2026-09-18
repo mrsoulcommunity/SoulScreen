@@ -63,14 +63,15 @@ public partial class MainWindow
     }
 
     private bool ControlBarWanted =>
-        !_shuttingDown && VideoHost.Visibility == Visibility.Visible && !_isMiniPlayer && !IsMarkupActive;
+        !_shuttingDown && VideoHost.Visibility == Visibility.Visible && !_isMiniPlayer && !IsMarkupActive && !_isFullscreen;
 
     private bool IsControlBarInUse =>
         ControlBar.IsMouseOver || ControlBar.IsKeyboardFocusWithin || VideoMenu.IsOpen || Video.IsFrozen;
 
     /// <summary>Puts the bar in step with the window: there, and briefly shown, whenever a
-    /// picture is on screen; gone in the mini player, which has controls of its own, and while
-    /// marking up, whose own bar takes the same place.</summary>
+    /// picture is on screen; gone in the mini player, which has controls of its own, while
+    /// marking up, whose own bar takes the same place, and in fullscreen, which keeps only
+    /// the picture and the button back out of it.</summary>
     private void UpdateControlBar()
     {
         if (ControlBar is null) return;

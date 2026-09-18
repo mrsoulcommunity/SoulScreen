@@ -22,11 +22,6 @@ public partial class MainWindow
     private WindowState _stateBeforeFullscreen = WindowState.Normal;
     private bool _isFullscreen;
 
-    /// <summary>True while the fullscreen controls are on screen.</summary>
-    private bool _chromeShown = true;
-
-    private static readonly Duration ChromeFade = new(TimeSpan.FromMilliseconds(180));
-
     private void InitialiseChrome()
     {
         ConfigureMoreMenu();
@@ -146,9 +141,20 @@ public partial class MainWindow
     private void ConfigureMoreMenu()
     {
         // Right edges aligned, just below the button: the menu opens back over the window
-        // rather than past the edge of one that is only as wide as a phone.
+        // rather than past the edge of one that is only as wide as a phone. At that width
+        // there is not always room for the whole menu to the left of the button, so the
+        // horizontal position is clamped to the window and the menu moves to stay inside it
+        // instead of hanging off the side, where part of it could not be clicked at all.
         MorePopup.CustomPopupPlacementCallback = (popupSize, targetSize, _) =>
-            [new CustomPopupPlacement(new Point(targetSize.Width - popupSize.Width + 10, targetSize.Height - 4), PopupPrimaryAxis.Horizontal)];
+        {
+            var left = targetSize.Width - popupSize.Width + 10;
+            var window = ActualWidth > 0 ? ActualWidth : MinWidth;
+            var buttonLeft = DistanceFromWindowLeft(MoreButton);
+            var minLeft = 12 - buttonLeft;
+            var maxLeft = window - popupSize.Width - 12 - buttonLeft;
+            if (minLeft <= maxLeft) left = Math.Clamp(left, minLeft, maxLeft);
+            return [new CustomPopupPlacement(new Point(left, targetSize.Height - 4), PopupPrimaryAxis.Horizontal)];
+        };
 
         // StaysOpen="False" closes the popup on any click outside it - including one on the
         // button, which would then toggle it straight back open. While it is open the button
@@ -172,6 +178,21 @@ public partial class MainWindow
         };
     }
 
+    /// <summary>How far an element's left edge sits from the window's own left edge, for the
+    /// popup placements that have to keep themselves inside it. Zero if the element is not in
+    /// the tree yet, which is where the unclamped placement is wanted anyway.</summary>
+    private double DistanceFromWindowLeft(FrameworkElement element)
+    {
+        try
+        {
+            return element.TransformToAncestor(RootGrid).Transform(new Point(0, 0)).X + RootGrid.Margin.Left;
+        }
+        catch (InvalidOperationException)
+        {
+            return 0;
+        }
+    }
+
     /// <summary>
     /// Stops drawing a label once it is squeezed narrower than a short word. Trimmed to a few
     /// pixels, a name or status line shows as a stray dot or a sliver of a letter, which reads
@@ -186,6 +207,10 @@ public partial class MainWindow
         UpdateAspectLock();
         UpdatePictureCorners();
         PositionOverlays();
+        // The picture controls can only live in the caption strip while the strip is wide
+        // enough to hold them beside everything else, so a resize is what decides where they
+        // belong - not the setting on its own.
+        ApplyControlBarPlacement();
         if (SettingsPanel.Visibility == Visibility.Visible) UpdateSettingsLayout();
     }
 
@@ -254,15 +279,12 @@ public partial class MainWindow
         FullscreenButton.ToolTip = "Leave fullscreen (Esc)";
         ApplyChromePadding();
 
-        // The toolbar and status bar move over the picture and appear on pointer movement.
-        Grid.SetRow(Toolbar, 1);
-        Toolbar.VerticalAlignment = VerticalAlignment.Top;
-        Toolbar.SetResourceReference(BackgroundProperty, "OverlayChrome");
-        Grid.SetRow(StatusBar, 1);
-        StatusBar.VerticalAlignment = VerticalAlignment.Bottom;
-        StatusBar.SetResourceReference(BackgroundProperty, "OverlayChrome");
-        _chromeShown = true;
-        ShowChrome();
+        // Fullscreen is the picture and nothing else: the header, footer and the floating
+        // picture controls are all hidden, and the one way back is the button they leave
+        // behind.
+        Toolbar.Visibility = Visibility.Collapsed;
+        StatusBar.Visibility = Visibility.Collapsed;
+        FullscreenExitHost.Visibility = Visibility.Visible;
         ApplyOverlayInsets();
         UpdatePictureCorners();
 
@@ -284,19 +306,12 @@ public partial class MainWindow
         FullscreenButton.ToolTip = "Fullscreen (F11)";
         ApplyChromePadding();
 
-        Grid.SetRow(Toolbar, 0);
-        Toolbar.VerticalAlignment = VerticalAlignment.Stretch;
-        Toolbar.SetResourceReference(BackgroundProperty, "SurfaceRaised");
-        Grid.SetRow(StatusBar, 2);
-        StatusBar.VerticalAlignment = VerticalAlignment.Stretch;
-        StatusBar.SetResourceReference(BackgroundProperty, "SurfaceRaised");
-        foreach (var strip in new[] { Toolbar, StatusBar })
-        {
-            strip.BeginAnimation(OpacityProperty, null);
-            strip.Opacity = 1;
-            strip.IsHitTestVisible = true;
-        }
-        _chromeShown = true;
+        FullscreenExitHost.Visibility = Visibility.Collapsed;
+        // Focus mode asks for the same strips to be gone; fullscreen only borrowed the
+        // idea, so it only brings them back if focus mode does not still want them hidden.
+        var chrome = _focusMode ? Visibility.Collapsed : Visibility.Visible;
+        Toolbar.Visibility = chrome;
+        StatusBar.Visibility = chrome;
         ApplyOverlayInsets();
         UpdatePictureCorners();
 
@@ -310,21 +325,20 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// In fullscreen the toolbar and status bar float over the content, where they would cover
-    /// the head of every panel and the foot of the log; the panels are inset to clear them.
+    /// Fullscreen used to float the toolbar and status bar over the content, which covered the
+    /// head of every panel and the foot of the log; both are simply hidden there now, so nothing
+    /// needs to be inset any more.
     /// </summary>
     private void ApplyOverlayInsets()
     {
-        var top = _isFullscreen ? Toolbar.Height : 0;
-        var bottom = _isFullscreen ? StatusBar.ActualHeight : 0;
-        var inset = new Thickness(0, top, 0, bottom);
+        var inset = new Thickness(0);
         SettingsPanel.Padding = inset;
         CapturesPanel.Padding = inset;
         HelpPanel.Padding = inset;
         DoctorPanel.Padding = inset;
         ApprovalPanel.Padding = inset;
         ViewerPanel.Padding = inset;
-        LogPanel.Margin = new Thickness(0, 0, 0, bottom);
+        LogPanel.Margin = inset;
         PositionOverlays();
     }
 
@@ -381,57 +395,29 @@ public partial class MainWindow
     }
 
     /// <summary>
-    /// Brings the pointer and the overlaid controls back on movement and restarts the
-    /// countdown that hides them again. Only in fullscreen: hiding the pointer over a
-    /// windowed picture would strand the user with no way to reach the toolbar.
+    /// Restarts the countdown that hides the pointer again. Only in fullscreen: hiding it over
+    /// a windowed picture would strand the user with no way to reach the toolbar.
     /// </summary>
     private void OnPointerMoved(object sender, MouseEventArgs e)
     {
         OnPointerMovedForControlBar(e);
         if (!_isFullscreen) return;
         if (Cursor == Cursors.None) Cursor = null;
-        ShowChrome();
         _cursorTimer?.Stop();
         _cursorTimer?.Start();
     }
 
+    /// <summary>Hides the pointer after a moment of stillness, since nothing else is left on
+    /// screen to reach with it besides the one button that stays up regardless.</summary>
     private void OnStillnessInFullscreen()
     {
         _cursorTimer?.Stop();
         if (!_isFullscreen) return;
-        // A pointer resting on the controls, or a menu open from them, means they are in use.
-        if (Toolbar.IsMouseOver || StatusBar.IsMouseOver || MoreButton.IsChecked == true || IsControlBarInUse) return;
+        // Resting on the one remaining button, or with a panel open over the picture, is not
+        // stillness to hide the pointer for.
+        if (FullscreenExitHost.IsMouseOver) return;
         if (IsPanelOpen()) return;
-        HideChrome();
         Cursor = Cursors.None;
-    }
-
-    private void ShowChrome()
-    {
-        if (!_isFullscreen || _chromeShown) return;
-        _chromeShown = true;
-        foreach (var strip in new[] { Toolbar, StatusBar })
-        {
-            strip.IsHitTestVisible = true;
-            strip.BeginAnimation(OpacityProperty, new DoubleAnimation(1, ChromeFade)
-            {
-                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseOut },
-            });
-        }
-    }
-
-    private void HideChrome()
-    {
-        if (!_chromeShown) return;
-        _chromeShown = false;
-        foreach (var strip in new[] { Toolbar, StatusBar })
-        {
-            strip.IsHitTestVisible = false;
-            strip.BeginAnimation(OpacityProperty, new DoubleAnimation(0, new Duration(TimeSpan.FromMilliseconds(320)))
-            {
-                EasingFunction = new CubicEase { EasingMode = EasingMode.EaseIn },
-            });
-        }
     }
 
     // ------------------------------------------------------------ aspect lock

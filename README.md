@@ -9,7 +9,7 @@
 [![Release](https://img.shields.io/github/v/release/mrsoulcommunity/SoulScreen?label=release&color=0e0f13)](https://github.com/mrsoulcommunity/SoulScreen/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%2011%20x64-0e0f13)](#requirements)
 [![.NET](https://img.shields.io/badge/.NET-8.0-512BD4)](#building-from-source)
-[![Tests](https://img.shields.io/badge/tests-406%20passing-2ea043)](#testing)
+[![Tests](https://img.shields.io/badge/tests-482%20passing-2ea043)](#testing)
 
 </div>
 
@@ -61,6 +61,7 @@ phone's screen at 498x1080 / 59.9 fps.
 | Sustained poor-connection advice, offered once, not on every hiccup | working |
 | Markup: pen, highlighter and laser pointer over the picture | working |
 | Captures viewer, with recordings played in place | working |
+| Favorite captures: starred, exempt from the storage budget, filterable and searchable | working |
 | A moment of a recording saved as an animated GIF or a short WebM | working |
 | A phone that drops and comes back inside a minute resumes the session | working |
 | Ask before an iPhone mirrors; allowed and blocked iPhones | working |
@@ -186,8 +187,8 @@ and the connection all keep going, and resuming lands on the live picture, not o
 
 `Ctrl+G` shows every screenshot and recording in the capture folder. Click one
 to look at it without leaving the app: the arrow keys step through the rest - held down, they
-speed up - `Space` plays a recording, `L` loops it until switched off, and `Delete` sends the one
-on screen to the Recycle Bin. Drag a tile out to drop the
+speed up - `Space` plays a recording, `L` loops it until switched off, `F` stars it as a
+favorite, and `Delete` sends the one on screen to the Recycle Bin. Drag a tile out to drop the
 file into Explorer or a chat; right-click, or `Ctrl+C` and `Delete` on a focused tile, to copy it (as the file,
 and as the picture for a screenshot), find it in Explorer, or move it to the Recycle Bin. Only
 files SoulScreen named are listed, so pointing the capture folder at Pictures does not bring
@@ -195,11 +196,22 @@ the whole of Pictures in with it. Screenshots can be saved as PNG or, a fraction
 as JPEG. Two taken in the same second no longer overwrite each other.
 
 The gallery has its own **search** - every word typed must appear in the file name, and typing
-`rec` or `shot` finds recordings and screenshots by kind without learning any syntax - and a
-**sort** choice: newest first, oldest first, or largest first. A summary line adds the folder
-up: how many captures and how much drive they take. A **storage budget** (off, 5, 20 or 50 GB,
-or a byte count hand-set in settings.json) moves the oldest captures to the Recycle Bin once
-the folder grows past it, so a long recording session can never quietly fill the drive.
+`rec` or `shot` finds recordings and screenshots by kind, `favorite` or `star` finds starred
+captures, all without learning any syntax - and a **sort** choice: newest first, oldest first,
+or largest first. A summary line adds the folder up: how many captures and how much drive they
+take. A **storage budget** (off, 5, 20 or 50 GB, or a byte count hand-set in settings.json)
+moves the oldest captures to the Recycle Bin once the folder grows past it, so a long recording
+session can never quietly fill the drive - a **favorite** is never touched by the budget, which
+is what starring one means.
+
+### Favorites
+
+Star a capture - the `F` key on a tile or in the viewer, its context menu, or the star button
+beside the viewer's other tools - to keep it safe from the storage budget and quick to find
+again. A starred capture carries a small star in its corner in the gallery, and the **Favorites**
+segment beside All/Screenshots/Recordings shows only what has been starred. Unstarring is the
+same key or button pressed again. A capture that is deleted, or moved outside SoulScreen, quietly
+drops off the favorites list on the next gallery refresh rather than leaving a stale entry behind.
 
 Recording remuxes the phone's own H.264 rather than re-encoding it, so the picture costs
 almost nothing and loses no quality. Sound is the exception: the phone sends AAC-ELD, which
@@ -360,67 +372,6 @@ The CI step `scripts/check-timestamp-literals.ps1` blocks new ad-hoc date-format
 sites (e.g. `ToString("yyyy…")` or `DateTime.Now.ToString(`) outside the formatter
 itself, so the next capture-filename addition routes through the same helper.
 
-### Multi-device mirroring
-
-SoulScreen can mirror 2, 3, or 4 iPhones simultaneously in a configurable grid:
-
-| Tile count | Layout | Notes |
-|---|---|---|
-| 1 | Full-screen | Same as before — zero regression |
-| 2 | 1×2 or 2×1 | Depends on window aspect ratio |
-| 3 | Presenter | Large tile (2/3 width) + 2 stacked small tiles |
-| 4 | 2×2 | Equal-sized tiles |
-
-**Keyboard shortcuts:**
-
-| Shortcut | Action |
-|---|---|
-| `Ctrl+1..4` | Focus tile N to full window |
-| `Ctrl+Shift+S` | Screenshot of focused tile |
-| `Ctrl+Shift+R` | Record focused tile |
-| `Ctrl+M` | Mute focused tile |
-| `Space` | Pause focused tile |
-| `Esc` / `Ctrl+H` | Return to grid from focus mode |
-| Double-click tile | Focus tile to full window |
-
-**Per-tile controls** (hover toolbar): Screenshot, Record, Mute, Swap to full. Each tile can
-route its audio to a different Windows output device (dropdown in toolbar). The global
-*Output device* in Settings remains the default for all tiles.
-
-**Recording.** `Ctrl+R` records all tiles simultaneously; `Ctrl+R` again stops all. Each tile
-produces its own MP4 in `Pictures\SoulScreen`, named with the device name and a Shamsi or
-Gregorian timestamp (depending on the locale setting).
-
-**Per-tile approval.** The *Ask before mirroring* toggle and the Allowed / Blocked phone
-lists apply per tile. A blocked phone shows a "Blocked" tile with no video pixels.
-
-**Mini player in grid mode.** `Ctrl+Shift+M` shrinks the window while keeping the grid.
-A setting controls whether the mini player shows the focused tile only or the full grid
-(default: keep grid).
-
-**Session summary.** When all sessions end, the toast shows an aggregate:
-`"Mirrored 3 of 4 tiles for 47 m 12 s; one tile dropped at 14:32 (network); 2 screenshots, 1 recording"`.
-
-**Architecture.** One mDNS advertisement (one entry in Screen Mirroring) with one RTSP
-server port. Each iPhone TCP connection gets its own `AirPlaySession` with its own pairing,
-FairPlay, H.264 decoder, audio output, and recording pipeline. Sessions are fully isolated —
-a crash on one tile does not affect the others. The `MultiSourceRouter` (`SoulScreen.Core`)
-aggregates all sessions behind the same `IMirrorSource` interface, so the existing UI and
-recording pipeline require no changes.
-
-**Performance budget (4 tiles @ 60 fps):**
-
-| Resource | Per tile | 4 tiles |
-|---|---|---|
-| RAM | ~44 MB | ~176 MB |
-| CPU | — | ~70% on mid-range i5 + Intel UHD |
-
-Profile with `Ctrl+I` (performance graph). Target: ≥ 55 fps per tile on the reference
-hardware (iPhone 17 Pro / iOS 26, Windows 11, i5-12400 + UHD 730).
-
-**Manual test checklist:** `artifacts/testbuild/multi-device-manual-checklist.md`
-
-**Design doc:** `docs/multi-device.md`
 
 ### Smoothness, and the delay it costs
 

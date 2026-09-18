@@ -41,7 +41,21 @@ public partial class MainWindow
         _updateTimer.Tick += (_, _) => MaybeRunBackgroundCheck();
         _updateTimer.Start();
 
+        ReportPreviousInstallFailure();
         MaybeRunBackgroundCheck();
+    }
+
+    /// <summary>Tells the user, once, when the update the previous run handed off to the
+    /// installer script did not actually finish - e.g. a file was still locked and robocopy
+    /// could not fully mirror the new build. Silence here would leave someone thinking they
+    /// are on the new version when the old one just started back up.</summary>
+    private void ReportPreviousInstallFailure()
+    {
+        if (UpdateService.ConsumeLastFailure() is not { } failure) return;
+        _log.Warn($"the update to {failure.Version} did not finish: {failure.Reason}");
+        ShowToast($"Updating to {failure.Version} did not finish", "\uEB90", "Details",
+            () => MessageBox.Show(this, failure.Reason, "Update did not finish",
+                MessageBoxButton.OK, MessageBoxImage.Warning));
     }
 
     private void DisposeUpdates()
@@ -119,9 +133,9 @@ public partial class MainWindow
     {
         if (UpdateStatusText is null) return;
 
-        _populatingSettings = true;
+        BeginPopulateSettings();
         try { UpdateAutoCheckToggle.IsChecked = _settings.CheckForUpdatesAutomatically; }
-        finally { _populatingSettings = false; }
+        finally { EndPopulateSettings(); }
 
         UpdateCheckButton.IsEnabled = !_updateChecking && !_updateBusy;
         UpdateInstallButton.Visibility = Visibility.Collapsed;
@@ -149,7 +163,7 @@ public partial class MainWindow
             UpdateStatusText.Text = $"SoulScreen {CurrentVersion}";
             UpdateDetailText.Text = _settings.LastUpdateCheckUtc is null
                 ? "Never checked for an update."
-                : $"No check has succeeded yet. Last tried {FormatCheckTime(_settings.LastUpdateCheckUtc.Value)}.";
+                : $"Up to date. Last checked {FormatCheckTime(_settings.LastUpdateCheckUtc.Value)}.";
             return;
         }
 
@@ -216,6 +230,19 @@ public partial class MainWindow
 
     private async void OnInstallUpdate(object sender, RoutedEventArgs e)
     {
+        try
+        {
+            await OnInstallUpdateCore();
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("install update failed unexpectedly", ex);
+            ShowToast("The update could not be installed - see the activity log", "\uEB90");
+        }
+    }
+
+    private async Task OnInstallUpdateCore()
+    {
         if (_updateBusy || _latestRelease is not { } release) return;
 
         var asset = UpdatePolicy.SelectWindowsAssetName(release.Assets.Select(a => a.Name)) is { } name
@@ -234,6 +261,7 @@ public partial class MainWindow
         if (answer != MessageBoxResult.Yes) return;
 
         _updateBusy = true;
+        _updateDownloadCts?.Dispose();
         _updateDownloadCts = new CancellationTokenSource();
         RefreshUpdateSection();
 
@@ -245,12 +273,11 @@ public partial class MainWindow
 
         try
         {
-            var stagingDir = await _updates.DownloadAndStageAsync(asset, release.Version.ToString(), progress, _updateDownloadCts.Token);
-            var zipPath = Path.Combine(Path.GetTempPath(), "SoulScreen-update", asset.Name);
+            var staged = await _updates.DownloadAndStageAsync(asset, release.Version.ToString(), progress, _updateDownloadCts.Token);
 
-            _log.Info($"update staged at {stagingDir}; handing off and restarting");
+            _log.Info($"update staged at {staged.ContentDir}; handing off and restarting");
             _quitRequested = true;
-            UpdateService.LaunchInstallerAndExit(stagingDir, zipPath);
+            UpdateService.LaunchInstallerAndExit(staged, release.Version.ToString());
             Close();
         }
         catch (UpdateException ex)
@@ -265,7 +292,7 @@ public partial class MainWindow
         catch (Exception ex)
         {
             _log.Warn("the update could not be installed", ex);
-            ShowToast("The update could not be installed - see the activity log", "");
+            ShowToast("The update could not be installed - see the activity log", "\uEB90");
         }
         finally
         {

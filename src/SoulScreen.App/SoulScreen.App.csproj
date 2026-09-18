@@ -21,7 +21,7 @@
     <!-- For the notification-area icon only; nothing else is drawn with WinForms. -->
     <UseWindowsForms>true</UseWindowsForms>
     <ApplicationIcon>Assets\SoulScreen.ico</ApplicationIcon>
-    <Version>1.2.0</Version>
+    <Version>1.3.0</Version>
     <AssemblyTitle>SoulScreen</AssemblyTitle>
     <Product>SoulScreen</Product>
     <Description>Mirror an iPhone screen onto Windows.</Description>

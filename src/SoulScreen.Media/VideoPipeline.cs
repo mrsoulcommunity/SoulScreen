@@ -62,6 +62,18 @@ public sealed class VideoPipeline : IAsyncDisposable
     private string? _pendingRecordingPath;
     private Task _recordingFinalisation = Task.CompletedTask;
 
+    /// <summary>
+    /// The most recent keyframe access unit - parameter sets plus an IDR picture, exactly
+    /// as fed to the decoder - kept on hand so a new recording can open immediately instead
+    /// of waiting for the next one. It is self-contained by construction, so it is exactly
+    /// as good as the next keyframe for opening a file, and on a poor connection the next
+    /// one can be a long time coming or never arrive before the session ends. Cleared the
+    /// moment the codec configuration actually changes, since it would then describe a
+    /// picture the track header no longer matches.
+    /// </summary>
+    private byte[]? _lastKeyFrame;
+    private long _lastKeyFrameTimestampUs;
+
     /// <summary>Decodes the phone's audio for the recording only. The live audio pipeline
     /// has a decoder of its own; sharing one would tie recording to whether sound is on.</summary>
     private AudioDecoder? _recordAudioDecoder;
@@ -149,13 +161,51 @@ public sealed class VideoPipeline : IAsyncDisposable
     /// </summary>
     public void StartRecording(string path)
     {
+        SessionRecorder? recorder = null;
+
         lock (_recordLock)
         {
             if (IsRecording) return;
-            _pendingRecordingPath = path;
-            // Recording from the next keyframe rather than the next frame.
-            _log.Info($"recording will start on the next keyframe: {path}");
+
+            // A keyframe already on hand is exactly as good as the next one - it is
+            // self-contained by construction - so there is no reason to wait when one is
+            // available.
+            if (_lastKeyFrame is { } cached && Format is { } format && TryOpenRecorderLocked(path, format))
+            {
+                recorder = _recorder;
+                try
+                {
+                    // Written here, still under the lock, and not after it. The decode
+                    // thread hands frames over through the same lock, so a later frame can
+                    // only be written once this call returns; writing the keyframe outside
+                    // the lock instead let a frame that was already on the decode thread slip
+                    // in first, and the file then opened - and stayed - on an inter frame,
+                    // which is exactly what keeping a keyframe on hand is meant to avoid.
+                    recorder!.Write(cached, _lastKeyFrameTimestampUs, isKeyFrame: true);
+                }
+                catch (Exception ex)
+                {
+                    _log.Error("recording failed", ex);
+                    recorder = null;
+                }
+            }
+            else
+            {
+                _pendingRecordingPath = path;
+            }
         }
+
+        if (recorder is null)
+        {
+            // Either no keyframe is on hand yet (the recorder opens on the next one), or the
+            // file opened but its first sample could not be written - a recording that has
+            // written nothing is closed again rather than left looking live.
+            if (_pendingRecordingPath is null) StopRecording();
+            else _log.Info($"recording will start on the next keyframe: {path}");
+            return;
+        }
+
+        _log.Info($"recording started immediately from a keyframe already on hand: {path}");
     }
 
     /// <summary>
@@ -286,16 +336,26 @@ public sealed class VideoPipeline : IAsyncDisposable
         // next keyframe instead.
         if (format.ParameterSets.Length > 0)
         {
+            bool changed;
             lock (_queueLock)
             {
                 // Only a configuration that actually differs invalidates what the decoder is
                 // tracking. Resynchronising on a repeat would stall the picture until the
                 // next keyframe for no reason at all.
-                if (!_parameterSets.AsSpan().SequenceEqual(format.ParameterSets))
+                changed = !_parameterSets.AsSpan().SequenceEqual(format.ParameterSets);
+                if (changed)
                 {
                     _parameterSets = format.ParameterSets;
                     _needKeyFrame = true;
                 }
+            }
+
+            if (changed)
+            {
+                // The cached keyframe belongs to the configuration that just changed: a
+                // decoder opening the file on it would see the new dimensions in the track
+                // header but old-configuration bytes in the sample.
+                lock (_recordLock) _lastKeyFrame = null;
             }
         }
 
@@ -506,6 +566,12 @@ public sealed class VideoPipeline : IAsyncDisposable
         SessionRecorder? recorder;
         lock (_recordLock)
         {
+            if (isKeyFrame)
+            {
+                _lastKeyFrame = annexB.ToArray();
+                _lastKeyFrameTimestampUs = timestampUs;
+            }
+
             if (_recorder is null)
             {
                 if (_pendingRecordingPath is null || !isKeyFrame) return;
@@ -514,24 +580,14 @@ public sealed class VideoPipeline : IAsyncDisposable
                 var format = Format;
                 if (format is null) return;
 
-                try
-                {
-                    // The track is declared up front because MP4 cannot grow one later, and
-                    // iOS often sets its audio stream up a moment after the picture starts.
-                    var audio = RecordAudio ? RecordingAudioTrack.AirPlay : (RecordingAudioTrack?)null;
-                    _recorder = SessionRecorder.Create(path, format.Value, audio);
-                    _pendingRecordingPath = null;
-                }
-                catch (Exception ex)
-                {
-                    _pendingRecordingPath = null;
-                    _log.Error($"could not start recording to {path}", ex);
-                    return;
-                }
+                if (!TryOpenRecorderLocked(path, format.Value)) { _pendingRecordingPath = null; return; }
+                _pendingRecordingPath = null;
             }
 
             recorder = _recorder;
         }
+
+        if (recorder is null) return;
 
         try
         {
@@ -541,6 +597,27 @@ public sealed class VideoPipeline : IAsyncDisposable
         {
             _log.Error("recording failed", ex);
             StopRecording();
+        }
+    }
+
+    /// <summary>
+    /// Creates the recorder for <paramref name="format"/>, honouring <see cref="RecordAudio"/>,
+    /// and assigns it to <see cref="_recorder"/> on success. Caller must hold
+    /// <see cref="_recordLock"/>. The track is declared up front because MP4 cannot grow one
+    /// later, and iOS often sets its audio stream up a moment after the picture starts.
+    /// </summary>
+    private bool TryOpenRecorderLocked(string path, VideoFormat format)
+    {
+        try
+        {
+            var audio = RecordAudio ? RecordingAudioTrack.AirPlay : (RecordingAudioTrack?)null;
+            _recorder = SessionRecorder.Create(path, format, audio);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            _log.Error($"could not start recording to {path}", ex);
+            return false;
         }
     }
 

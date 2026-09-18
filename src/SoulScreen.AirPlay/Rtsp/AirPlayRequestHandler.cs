@@ -47,14 +47,6 @@ public sealed class AirPlayRequestHandler(AirPlayOptions options, DeviceIdentity
 
     public event EventHandler<AirPlaySession>? SessionStarted;
     public event EventHandler<AirPlaySession>? SessionEnded;
-
-    /// <summary>The same media events as the single-session set above, but carrying the
-    /// session they came from, so a multi-device host can route each sender's samples to its
-    /// own tile. A single-session host keeps using the plain events.</summary>
-    public event EventHandler<(AirPlaySession Session, VideoFormat Format)>? SessionVideoFormatChanged;
-    public event EventHandler<(AirPlaySession Session, MediaSample Sample)>? SessionVideoSampleReady;
-    public event EventHandler<(AirPlaySession Session, AudioFormat Format)>? SessionAudioFormatChanged;
-    public event EventHandler<(AirPlaySession Session, MediaSample Sample)>? SessionAudioSampleReady;
     public event EventHandler<SourceDeviceInfo>? DeviceIdentified;
     public event EventHandler<VideoFormat>? VideoFormatChanged;
     public event EventHandler<MediaSample>? VideoSampleReady;
@@ -63,12 +55,6 @@ public sealed class AirPlayRequestHandler(AirPlayOptions options, DeviceIdentity
 
     /// <summary>The session currently streaming, if any.</summary>
     public AirPlaySession? ActiveSession { get; private set; }
-
-    /// <summary>Every live session - the active mirroring one and any still pairing - so a
-    /// multi-device host can offer each sender its own tile. Snapshot under lock.</summary>
-    public IReadOnlyList<AirPlaySession> Sessions
-    {
-        get { lock (_sessionsGate) return [.. _sessions]; } }
 
     private readonly List<AirPlaySession> _sessions = [];
     private readonly object _sessionsGate = new();
@@ -131,21 +117,6 @@ public sealed class AirPlayRequestHandler(AirPlayOptions options, DeviceIdentity
         lock (_sessionsGate) _sessions.Add(session);
         return session;
     }
-
-    /// <summary>Raises the per-session video-format event. The stream wiring calls this
-    /// instead of the plain event when it wants a multi-device host to see which tile the
-    /// format belongs to.</summary>
-    internal void RaiseSessionVideoFormatChanged(AirPlaySession session, VideoFormat format)
-        => SessionVideoFormatChanged?.Invoke(this, (session, format));
-
-    internal void RaiseSessionVideoSampleReady(AirPlaySession session, MediaSample sample)
-        => SessionVideoSampleReady?.Invoke(this, (session, sample));
-
-    internal void RaiseSessionAudioFormatChanged(AirPlaySession session, AudioFormat format)
-        => SessionAudioFormatChanged?.Invoke(this, (session, format));
-
-    internal void RaiseSessionAudioSampleReady(AirPlaySession session, MediaSample sample)
-        => SessionAudioSampleReady?.Invoke(this, (session, sample));
 
     // ------------------------------------------------------------------ methods
 
@@ -396,16 +367,8 @@ public sealed class AirPlayRequestHandler(AirPlayOptions options, DeviceIdentity
                     return null;
                 }
 
-                video.FormatChanged += (_, format) =>
-                {
-                    VideoFormatChanged?.Invoke(this, format);
-                    RaiseSessionVideoFormatChanged(session, format);
-                };
-                video.SampleReady += (_, sample) =>
-                {
-                    VideoSampleReady?.Invoke(this, sample);
-                    RaiseSessionVideoSampleReady(session, sample);
-                };
+                video.FormatChanged += (_, format) => VideoFormatChanged?.Invoke(this, format);
+                video.SampleReady += (_, sample) => VideoSampleReady?.Invoke(this, sample);
                 video.Ended += (_, _) => _log.Info("mirroring data channel ended");
 
                 ActiveSession = session;
@@ -435,13 +398,8 @@ public sealed class AirPlayRequestHandler(AirPlayOptions options, DeviceIdentity
                     return null;
                 }
 
-                audio.SampleReady += (_, sample) =>
-                {
-                    AudioSampleReady?.Invoke(this, sample);
-                    RaiseSessionAudioSampleReady(session, sample);
-                };
+                audio.SampleReady += (_, sample) => AudioSampleReady?.Invoke(this, sample);
                 AudioFormatChanged?.Invoke(this, format);
-                RaiseSessionAudioFormatChanged(session, format);
 
                 return new PlistDictionary
                 {

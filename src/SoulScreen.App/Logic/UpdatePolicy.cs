@@ -55,6 +55,20 @@ public static class UpdatePolicy
         if (string.IsNullOrWhiteSpace(digest)) return null;
         var separator = digest.IndexOf(':');
         if (separator <= 0 || separator == digest.Length - 1) return null;
-        return (digest[..separator].Trim().ToLowerInvariant(), digest[(separator + 1)..].Trim());
+        var hex = digest[(separator + 1)..].Trim();
+        if (string.IsNullOrEmpty(hex)) return null;
+        return (digest[..separator].Trim().ToLowerInvariant(), hex);
     }
+
+    /// <summary>
+    /// Robocopy's exit code is a bitmask, not a boolean: 0-7 all mean some combination of
+    /// "nothing to do", "files copied" and "extra files removed" at the destination - every
+    /// one of those is a successful mirror. 8 or higher means at least one file could not be
+    /// copied (typically because it was still locked by a process that had not exited in
+    /// time), so the install script treats those as a failed update rather than silently
+    /// starting the new build over a half-mirrored install directory.
+    /// </summary>
+    public const int RobocopySuccessThreshold = 8;
+
+    public static bool IsSuccessfulMirror(int robocopyExitCode) => robocopyExitCode is >= 0 && robocopyExitCode < RobocopySuccessThreshold;
 }

@@ -20,8 +20,6 @@ public static class SettingsTransfer
         Applied,
         /// <summary>The file could not be read as settings at all.</summary>
         Unreadable,
-        /// <summary>The file was readable but held nothing recognisable.</summary>
-        Empty,
     }
 
     /// <summary>The fields an export/import carries, described for the user.</summary>
@@ -30,7 +28,7 @@ public static class SettingsTransfer
         "Receiver name, port, resolution and audio",
         "Appearance: theme, accent",
         "Picture: fit, rotation, smoothness, rounded corners",
-        "Capture folder, format, storage budget",
+        "Capture folder, format, storage budget, starred captures",
         "Window: displays, tray, hotkeys, startup",
     ];
 
@@ -47,6 +45,13 @@ public static class SettingsTransfer
         void Set<T>(T newValue, T oldValue, string label, Action assign)
         {
             if (EqualityComparer<T>.Default.Equals(newValue, oldValue)) return;
+            assign();
+            changed.Add(label);
+        }
+
+        void SetList<T>(IReadOnlyList<T> newValue, IReadOnlyList<T> oldValue, string label, Action assign)
+        {
+            if (newValue.Count == oldValue.Count && Enumerable.SequenceEqual(newValue, oldValue)) return;
             assign();
             changed.Add(label);
         }
@@ -81,6 +86,7 @@ public static class SettingsTransfer
         Set(imported.RecordAudio, current.RecordAudio, "recording audio", () => current.RecordAudio = imported.RecordAudio);
         Set(imported.CopyScreenshotToClipboard, current.CopyScreenshotToClipboard, "clipboard screenshots", () => current.CopyScreenshotToClipboard = imported.CopyScreenshotToClipboard);
         Set(imported.CaptureBudgetBytes, current.CaptureBudgetBytes, "storage budget", () => current.CaptureBudgetBytes = imported.CaptureBudgetBytes);
+        SetList(imported.FavoriteCaptures, current.FavoriteCaptures, "starred captures", () => current.FavoriteCaptures = imported.FavoriteCaptures);
 
         // ---------------------------------------------------------- window and system
         Set(imported.AlwaysOnTop, current.AlwaysOnTop, "keep on top", () => current.AlwaysOnTop = imported.AlwaysOnTop);

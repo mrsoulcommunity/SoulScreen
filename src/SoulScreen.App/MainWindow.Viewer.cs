@@ -104,6 +104,19 @@ public partial class MainWindow
 
     private async void ShowViewerItem()
     {
+        try
+        {
+            await ShowViewerItemCore();
+        }
+        catch (Exception ex)
+        {
+            _log.Warn("viewer display failed", ex);
+            ShowViewerMessage("Could not display this capture.");
+        }
+    }
+
+    private async Task ShowViewerItemCore()
+    {
         StopViewerMedia();
         var generation = ++_viewerGeneration;
 
@@ -124,6 +137,7 @@ public partial class MainWindow
         CloseClipPanel();
         // Only a recording can be cut down to a moment.
         ViewerClipButton.Visibility = item.Kind == CaptureKind.Recording ? Visibility.Visible : Visibility.Collapsed;
+        UpdateViewerFavoriteButton();
         // The loop belongs to the clip it was switched on for.
         _viewerLoop = false;
         ViewerLoopButton.IsChecked = false;
@@ -434,6 +448,23 @@ public partial class MainWindow
         if (CurrentViewerItem() is { } item) CopyCapture(item);
     }
 
+    private void OnViewerFavoriteToggle(object sender, RoutedEventArgs e)
+    {
+        if (CurrentViewerItem() is { } item) ToggleFavorite(item);
+    }
+
+    /// <summary>Reflects the current item's starred state on the viewer's own toggle -
+    /// separate from the gallery tile, which may not even be visible while the viewer is
+    /// open (a capture reached by Next/Previous, say).</summary>
+    private void UpdateViewerFavoriteButton()
+    {
+        var isFavorite = CurrentViewerItem()?.IsFavorite == true;
+        ViewerFavoriteButton.IsChecked = isFavorite;
+        ViewerFavoriteButton.ToolTip = isFavorite ? "Remove from Favorites (F)" : "Add to Favorites (F)";
+        System.Windows.Automation.AutomationProperties.SetName(
+            ViewerFavoriteButton, isFavorite ? "Remove from Favorites" : "Add to Favorites");
+    }
+
     private void OnViewerReveal(object sender, RoutedEventArgs e)
     {
         if (CurrentViewerItem() is { } item && CaptureStillExists(item)) RevealFile(item.Path);
@@ -514,6 +545,9 @@ public partial class MainWindow
             case Key.End: StepViewer(_viewerItems.Count - 1 - _viewerIndex); return true;
             case Key.Space: ToggleViewerPlayback(); return true;
             case Key.L: ViewerLoopButton.IsChecked = ViewerLoopButton.IsChecked != true; OnViewerLoopToggle(ViewerLoopButton, new RoutedEventArgs()); return true;
+            case Key.F when CurrentViewerItem() is { } item:
+                ToggleFavorite(item);
+                return true;
             case Key.C when CurrentViewerItem() is { Kind: CaptureKind.Recording }:
                 OpenClipPanel();
                 return true;

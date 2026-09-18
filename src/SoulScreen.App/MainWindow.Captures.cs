@@ -5,6 +5,7 @@ using System.Globalization;
 using System.IO;
 using System.Windows;
 using System.Windows.Controls;
+using System.Windows.Controls.Primitives;
 using System.Windows.Input;
 using System.Windows.Media;
 using System.Windows.Media.Imaging;
@@ -27,8 +28,15 @@ public partial class MainWindow
     /// <summary>The most captures listed at once, which bounds the thumbnails held in memory.</summary>
     private const int MaxCapturesShown = 120;
 
-    /// <summary>Narrowest a tile may be before the gallery drops a column.</summary>
+    /// <summary>Narrowest a tile may be before the gallery adds a further column beyond the
+    /// two it always tries to keep.</summary>
     private const double MinCaptureTileWidth = 150;
+
+    /// <summary>Below this, even two columns would crush each tile too small to read; the
+    /// gallery drops to one instead. Above it, two is the floor - most of SoulScreen's windows
+    /// are phone-narrow, where the old width-only rule often settled on one column and left
+    /// half the row empty.</summary>
+    private const double NarrowestForTwoColumns = 160;
 
     /// <summary>Bumped whenever the list is rebuilt, so a slow listing or thumbnail for an old
     /// list never lands in a new one.</summary>
@@ -46,6 +54,7 @@ public partial class MainWindow
     private sealed class CaptureItem : INotifyPropertyChanged
     {
         private Brush? _thumbnail;
+        private bool _isFavorite;
 
         public required string Path { get; init; }
         public required CaptureKind Kind { get; init; }
@@ -55,7 +64,7 @@ public partial class MainWindow
         /// <summary>Text OCR found in the screenshot, or null before it has been indexed
         /// (or for anything that is not a screenshot). Empty string, not null, once indexed
         /// with nothing recognised - the distinction is "not looked at yet" vs "looked at,
-        /// nothing there", which matters so an item is never re-OCR'd forever for having
+        /// nothing there" - which matters so an item is never re-OCR'd forever for having
         /// no text.</summary>
         public string? OcrText { get; set; }
 
@@ -69,6 +78,27 @@ public partial class MainWindow
 
         public Visibility PlayBadge => Kind == CaptureKind.Recording ? Visibility.Visible : Visibility.Collapsed;
 
+        /// <summary>Starred to keep: exempt from the storage budget, and found by searching
+        /// "favorite" or "star". Set from <c>_settings.FavoriteCaptures</c> on every refresh,
+        /// so a change made from the viewer is reflected in the gallery tile too.</summary>
+        public bool IsFavorite
+        {
+            get => _isFavorite;
+            set
+            {
+                if (_isFavorite == value) return;
+                _isFavorite = value;
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(IsFavorite)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FavoriteBadge)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(FavoriteMenuLabel)));
+                PropertyChanged?.Invoke(this, new PropertyChangedEventArgs(nameof(AccessibleName)));
+            }
+        }
+
+        public Visibility FavoriteBadge => IsFavorite ? Visibility.Visible : Visibility.Collapsed;
+
+        public string FavoriteMenuLabel => IsFavorite ? "Remove from Favorites" : "Add to Favorites";
+
         public string AccessibleName
         {
             get
@@ -78,7 +108,8 @@ public partial class MainWindow
                 // for screen readers, so do not collapse "Both" down to a single calendar.
                 var stamp = Title;
                 var kind = Kind == CaptureKind.Recording ? "Recording" : "Screenshot";
-                return $"{kind}, {stamp}";
+                var favorite = IsFavorite ? ", favorite" : "";
+                return $"{kind}{favorite}, {stamp}";
             }
         }
 
@@ -99,7 +130,9 @@ public partial class MainWindow
     {
         CaptureList.Tag = 170.0;
         CapturesScroller.SizeChanged += (_, _) => UpdateCaptureTileWidth();
-        CapturesToolbar.SizeChanged += (_, _) => UpdateCapturesToolbarLayout();
+        // Focus lands in the box only once the popup has actually opened - setting it right
+        // after IsOpen = true would ask for focus before the box exists in the visual tree.
+        CapturesSearchPopup.Opened += (_, _) => CapturesSearchBox.Focus();
         // A gallery opened from the toolbar, the palette or the tray starts from everything,
         // so a search left behind does not hide captures from a fresh look.
         CapturesPanel.IsVisibleChanged += (_, _) =>
@@ -172,6 +205,7 @@ public partial class MainWindow
     {
         if (CaptureList is null) return;
         ApplyCaptureFilter();
+        CapturesFilterPopup.IsOpen = false;
     }
 
     private void OnCapturesSearchChanged(object sender, TextChangedEventArgs e)
@@ -184,6 +218,7 @@ public partial class MainWindow
     {
         if (CaptureList is null) return;
         ApplyCaptureFilter();
+        CapturesSortPopup.IsOpen = false;
     }
 
     /// <summary>The order the sort control is showing.</summary>
@@ -222,6 +257,19 @@ public partial class MainWindow
         }
 
         if (generation != _captureGeneration || _shuttingDown || CapturesPanel.Visibility != Visibility.Visible) return;
+
+        // Favorites are settings, not filesystem facts: applied here, once, rather than
+        // wired into the static ListCaptures, which knows nothing of _settings. A favorite
+        // whose file has since gone (moved, deleted outside the app) is dropped from the
+        // list so it cannot grow forever with entries that point at nothing.
+        var existingPaths = items.Select(item => item.Path).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var prunedFavorites = Logic.CaptureFavorites.PruneMissing(_settings.FavoriteCaptures, existingPaths.Contains);
+        if (prunedFavorites.Count != _settings.FavoriteCaptures.Count)
+        {
+            _settings.FavoriteCaptures = prunedFavorites;
+            _settings.Save();
+        }
+        foreach (var item in items) item.IsFavorite = Logic.CaptureFavorites.Contains(_settings.FavoriteCaptures, item.Path);
 
         _allCaptures = items;
         ApplyCaptureFilter();
@@ -263,11 +311,12 @@ public partial class MainWindow
 
         var shown = CapturesShots.IsChecked == true ? complete.Where(item => item.Kind == CaptureKind.Screenshot)
             : CapturesVideos.IsChecked == true ? complete.Where(item => item.Kind == CaptureKind.Recording)
+            : CapturesFavorites.IsChecked == true ? complete.Where(item => item.IsFavorite)
             : complete;
 
         var query = CapturesSearchBox.Text;
         var matching = string.IsNullOrWhiteSpace(query) ? shown.ToList()
-            : shown.Where(item => CaptureFilter.Matches(item.FileName, query) || OcrIndex.Matches(item.OcrText, query)).ToList();
+            : shown.Where(item => CaptureFilter.Matches(item.FileName, query, item.IsFavorite) || OcrIndex.Matches(item.OcrText, query)).ToList();
         CaptureFilter.Sort(matching, item => item.ModifiedLocal, item => item.Size, CaptureSort);
         var list = matching.Take(MaxCapturesShown).ToList();
 
@@ -291,10 +340,20 @@ public partial class MainWindow
         CapturesEmptyTitle.Text = query.Length > 0 && complete.Count > 0 ? "Nothing matches that search"
             : CapturesShots.IsChecked == true ? "No screenshots yet"
             : CapturesVideos.IsChecked == true ? "No recordings yet"
+            : CapturesFavorites.IsChecked == true ? "No favorites yet"
             : "No captures yet";
         CapturesEmptyDetail.Text = query.Length > 0 && complete.Count > 0
             ? "Try fewer words, or clear the search to see everything."
-            : "Screenshots (Ctrl+S) and recordings (Ctrl+R) of a mirrored phone are kept here.";
+            : CapturesFavorites.IsChecked == true
+                ? "Star a capture, or press F while it is open, to keep it here."
+                : "Screenshots (Ctrl+S) and recordings (Ctrl+R) of a mirrored phone are kept here.";
+
+        // Each toolbar control collapsed to a plain icon button, so a dot is the only hint
+        // left that it is holding something other than its default - without it, a filter or
+        // sort left on from an earlier visit would be invisible until the popup is reopened.
+        CapturesFilterActiveDot.Visibility = CapturesAll.IsChecked != true ? Visibility.Visible : Visibility.Collapsed;
+        CapturesSearchActiveDot.Visibility = query.Length > 0 ? Visibility.Visible : Visibility.Collapsed;
+        CapturesSortActiveDot.Visibility = CapturesSortNewest.IsChecked != true ? Visibility.Visible : Visibility.Collapsed;
     }
 
     private static string Plural(int count, string noun) => $"{count} {noun}{(count == 1 ? "" : "s")}";
@@ -416,95 +475,38 @@ public partial class MainWindow
         }
     }
 
-    /// <summary>
-    /// Keeps the four parts of the captures toolbar on one line while the window is wide
-    /// enough, and moves the search + sort pair onto its own row when it is not. Moving the
-    /// element between hosts rather than swapping templates, so its state - the text being
-    /// typed, the sort chosen - rides along untouched. The move itself is faded and eased
-    /// so a resize reads as the toolbar folding, not controls teleporting.
-    /// </summary>
-    private void UpdateCapturesToolbarLayout()
+    /// <summary>Filter, search and sort each collapse to one small icon button - the toolbar's
+    /// width no longer depends on the window's, so there is nothing left to fold or wrap at
+    /// any size. A click opens that button's own popup with the full set of choices; picking
+    /// one (or, for search, just clicking elsewhere) closes it again. Opening one closes the
+    /// other two, so at most one is ever up.</summary>
+    private void ToggleCapturesPopup(Popup popup)
     {
-        if (CapturesToolbar.ActualWidth <= 0) return;
-
-        // How wide one line needs to be: the filter segments and the two icon buttons take
-        // what they take; the search + sort pair keeps a sensible floor even when squeezed.
-        const double searchAndSortFloor = 350;
-        const double iconButtons = 76;
-        var wanted = CapturesAll.ActualWidth + CapturesShots.ActualWidth + CapturesVideos.ActualWidth
-                     + searchAndSortFloor + iconButtons + 40; // margins and breathing room
-        var wrapped = CapturesToolsHost.Parent == CapturesToolsWrap;
-        var shouldWrap = CapturesToolbar.ActualWidth < wanted;
-
-        if (shouldWrap == wrapped) return;
-
-        if (shouldWrap)
-        {
-            CapturesToolsWrap.Children.Add(CapturesToolsHost);
-            CapturesToolsWrap.Visibility = Visibility.Visible;
-            CapturesToolsHost.Margin = new Thickness(0, 0, 0, 0);
-            CapturesToolsHost.HorizontalAlignment = HorizontalAlignment.Left;
-        }
-        else
-        {
-            CapturesToolsHost.Margin = new Thickness(10, 0, 10, 0);
-            CapturesToolsHost.HorizontalAlignment = HorizontalAlignment.Center;
-            CapturesToolbar.Children.Add(CapturesToolsHost);
-            Grid.SetRow(CapturesToolsHost, 0);
-            Grid.SetColumn(CapturesToolsHost, 1);
-            CapturesToolsWrap.Visibility = Visibility.Collapsed;
-        }
-
-        AnimateCapturesToolsMove();
+        var opening = !popup.IsOpen;
+        CapturesFilterPopup.IsOpen = false;
+        CapturesSearchPopup.IsOpen = false;
+        CapturesSortPopup.IsOpen = false;
+        popup.IsOpen = opening;
     }
 
-    /// <summary>The short slide-and-fade that plays after the search + sort pair has moved
-    /// rows: eight pixels from the direction it came, over 180 ms. Skipped when the user
-    /// has asked Windows to keep animation to a minimum.</summary>
-    private void AnimateCapturesToolsMove()
-    {
-        if (!Motion.Enabled)
-        {
-            CapturesToolsHost.BeginAnimation(OpacityProperty, null);
-            CapturesToolsHost.Opacity = 1;
-            CapturesToolsSlide.BeginAnimation(TranslateTransform.YProperty, null);
-            CapturesToolsSlide.Y = 0;
-            return;
-        }
+    private void OnToggleCapturesFilterPopup(object sender, RoutedEventArgs e) => ToggleCapturesPopup(CapturesFilterPopup);
 
-        var slidingDown = CapturesToolsHost.Parent == CapturesToolsWrap;
-        CapturesToolsSlide.BeginAnimation(TranslateTransform.YProperty, null);
-        CapturesToolsSlide.Y = slidingDown ? -8 : 8;
-        CapturesToolsSlide.BeginAnimation(TranslateTransform.YProperty,
-            new System.Windows.Media.Animation.DoubleAnimation(0, TimeSpan.FromMilliseconds(180))
-            {
-                EasingFunction = new System.Windows.Media.Animation.CubicEase
-                {
-                    EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut,
-                },
-            });
+    private void OnToggleCapturesSearchPopup(object sender, RoutedEventArgs e) => ToggleCapturesPopup(CapturesSearchPopup);
 
-        CapturesToolsHost.BeginAnimation(OpacityProperty, null);
-        CapturesToolsHost.Opacity = 0.35;
-        CapturesToolsHost.BeginAnimation(OpacityProperty,
-            new System.Windows.Media.Animation.DoubleAnimation(1, TimeSpan.FromMilliseconds(180))
-            {
-                EasingFunction = new System.Windows.Media.Animation.CubicEase
-                {
-                    EasingMode = System.Windows.Media.Animation.EasingMode.EaseOut,
-                },
-            });
-    }
+    private void OnToggleCapturesSortPopup(object sender, RoutedEventArgs e) => ToggleCapturesPopup(CapturesSortPopup);
 
     private void UpdateCaptureTileWidth()
     {
-        // The scroller's own width less a fixed allowance for its scroll bar, rather than the
-        // viewport: the viewport narrows when the bar appears, which could change the column
-        // count, which could take the bar away again.
-        var available = CapturesScroller.ActualWidth - CaptureList.Margin.Left - CaptureList.Margin.Right - 12;
+        // The scroller's own width less a fixed allowance for its scroll bar and padding,
+        // rather than the viewport: the viewport narrows when the bar appears, which could
+        // change the column count, which could take the bar away again. Rounded down a bit
+        // further than the bar alone needs, since ItemsControl's real content width has come
+        // in a few pixels under this estimate before - better a sliver of slack on the right
+        // than two columns whose combined width just barely loses the fit and drops to one.
+        var available = CapturesScroller.ActualWidth - CaptureList.Margin.Left - CaptureList.Margin.Right - 24;
         if (available <= 0) return;
 
-        var columns = Math.Max(1, (int)(available / MinCaptureTileWidth));
+        var columns = available < NarrowestForTwoColumns ? 1 : Math.Max(2, (int)(available / MinCaptureTileWidth));
         var width = Math.Floor(available / columns);
         if (CaptureList.Tag is not double current || Math.Abs(current - width) > 0.5) CaptureList.Tag = width;
     }
@@ -612,6 +614,27 @@ public partial class MainWindow
         if (CaptureFrom(sender) is { } item) DeleteCapture(item);
     }
 
+    private void OnCaptureFavoriteToggle(object sender, RoutedEventArgs e)
+    {
+        if (CaptureFrom(sender) is { } item) ToggleFavorite(item);
+    }
+
+    /// <summary>Stars or unstars a capture, and keeps every view of it - the tile, the
+    /// viewer's toolbar, the Favorites filter - in step with the one settings list that
+    /// decides it.</summary>
+    private void ToggleFavorite(CaptureItem item)
+    {
+        var isFavorite = CaptureFavorites.Toggle(_settings.FavoriteCaptures, item.Path);
+        _settings.Save();
+        item.IsFavorite = isFavorite;
+        // Only the Favorites filter can hide a tile as a result of this change; the newest/
+        // oldest/largest order and the other segments are unaffected by starring.
+        if (CapturesFavorites.IsChecked == true) ApplyCaptureFilter();
+        UpdateViewerFavoriteButton();
+        ShowToast(isFavorite ? "Added to Favorites" : "Removed from Favorites",
+            isFavorite ? "\uE735" : "\uE734"); // the same star the gallery tile and viewer carry
+    }
+
     private void OnCaptureTileKeyDown(object sender, KeyEventArgs e)
     {
         if (CaptureFrom(sender) is not { } item) return;
@@ -624,6 +647,11 @@ public partial class MainWindow
         else if (e.Key == Key.C && Keyboard.Modifiers == ModifierKeys.Control)
         {
             CopyCapture(item);
+            e.Handled = true;
+        }
+        else if (e.Key == Key.F && Keyboard.Modifiers == ModifierKeys.None)
+        {
+            ToggleFavorite(item);
             e.Handled = true;
         }
     }
@@ -706,8 +734,11 @@ public partial class MainWindow
         }
 
         _allCaptures.Remove(item);
+        // A deleted file leaving a stale favorite behind would otherwise sit unnoticed
+        // until the next gallery refresh prunes it; removed immediately instead.
+        if (CaptureFavorites.Remove(_settings.FavoriteCaptures, item.Path)) _settings.Save();
         ApplyCaptureFilter();
-        ShowToast("Moved to the Recycle Bin", "");
+        ShowToast("Moved to the Recycle Bin", "\uE74D");
         return true;
     }
 
@@ -731,7 +762,8 @@ public partial class MainWindow
                     var info = new FileInfo(path);
                     if (!info.Exists) continue;
                     candidates.Add(new CaptureBudget.Candidate(path, info.Length, info.LastWriteTimeUtc,
-                        IsBeingRecorded: string.Equals(path, _pipeline?.RecordingPath, StringComparison.OrdinalIgnoreCase)));
+                        IsBeingRecorded: string.Equals(path, _pipeline?.RecordingPath, StringComparison.OrdinalIgnoreCase),
+                        IsFavorite: CaptureFavorites.Contains(_settings.FavoriteCaptures, path)));
                 }
                 catch (IOException) { }
                 catch (UnauthorizedAccessException) { }

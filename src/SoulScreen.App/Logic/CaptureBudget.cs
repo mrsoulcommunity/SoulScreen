@@ -18,7 +18,10 @@ internal static class CaptureBudget
     /// <param name="ModifiedUtc">When it was last written.</param>
     /// <param name="IsBeingRecorded">True for the recording in progress, which is never a
     /// candidate: deleting the file being written ends the recording as a playable file.</param>
-    public sealed record Candidate(string Path, long SizeBytes, DateTime ModifiedUtc, bool IsBeingRecorded);
+    /// <param name="IsFavorite">True for a capture starred to keep, which the budget must
+    /// never remove - starring something is how a user says "not this one" to the very
+    /// pruning this budget exists to do.</param>
+    public sealed record Candidate(string Path, long SizeBytes, DateTime ModifiedUtc, bool IsBeingRecorded, bool IsFavorite = false);
 
     /// <summary>The outcome of planning: what to remove, and what to say about it.</summary>
     public sealed record Plan(IReadOnlyList<string> Remove, long FreedBytes);
@@ -39,7 +42,7 @@ internal static class CaptureBudget
         if (total <= budgetBytes) return new Plan([], 0);
 
         var removable = captures
-            .Where(c => !c.IsBeingRecorded)
+            .Where(c => !c.IsBeingRecorded && !c.IsFavorite)
             .OrderBy(c => c.ModifiedUtc)
             .ToList();
         if (removable.Count == 0) return new Plan([], 0);

@@ -21,6 +21,18 @@ internal static unsafe class ColourSpace
     /// </summary>
     public const int SwsPoint = 0x10;
 
+    /// <summary>
+    /// Bilinear resampling. Needed even when luma keeps its exact geometry: 4:2:0 chroma is
+    /// still being upsampled two-for-one into BGRA's full-resolution planes, and nearest-
+    /// neighbour picks that up at a crop edge - an iPhone's mirrored width is rarely a
+    /// multiple of the macroblock size, so almost every session decodes a cropped picture,
+    /// and a chroma sample nearest to the crop boundary can round to one from the padding
+    /// column the crop discarded. Bilinear blends it with its valid neighbour instead of
+    /// substituting it outright, which is what turns a hard, flickering seam at the picture's
+    /// edge into nothing visible.
+    /// </summary>
+    public const int SwsBilinear = 2;
+
     /// <summary>swscale's neutral contrast and saturation, both 1.0 in 16.16 fixed point.</summary>
     public const int NeutralGain = 1 << 16;
 

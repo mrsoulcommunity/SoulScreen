@@ -21,7 +21,63 @@ public partial class MainWindow
     /// <summary>Set when new log lines have arrived but the panel has not been redrawn.</summary>
     private bool _logDirty;
 
-    private void InitialiseLog() => Log.Entry += OnLogEntry;
+    /// <summary>How wide the level filter wants to be before it has to fold, measured once -
+    /// its labels never change, and re-measuring on every resize would fight the layout pass
+    /// that asked for the figure.</summary>
+    private double _logFilterWanted;
+
+    private void InitialiseLog()
+    {
+        Log.Entry += OnLogEntry;
+        LogPanel.SizeChanged += (_, _) => UpdateLogHeaderLayout();
+        Loaded += (_, _) =>
+        {
+            var previous = LogFilterTrack.MaxWidth;
+            LogFilterTrack.MaxWidth = double.PositiveInfinity;
+            LogFilterTrack.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+            _logFilterWanted = LogFilterTrack.DesiredSize.Width;
+            LogFilterTrack.MaxWidth = previous;
+            UpdateLogHeaderLayout();
+        };
+    }
+
+    /// <summary>
+    /// Fits the log's header to the panel it is docked in, so that nothing up there is ever
+    /// drawn over anything else. The level filter and the search box together want more room
+    /// than a narrow window has: the search box takes what is left once the filter has its
+    /// width, and stands down when that would not show a few characters - a sliver of a text
+    /// field is worse than none, since it takes the pointer from the button beside it and
+    /// gives nothing back. The filter folds onto a second line inside its capsule when the
+    /// row is narrower still, which keeps every level reachable at any width.
+    /// </summary>
+    private void UpdateLogHeaderLayout()
+    {
+        if (LogPanel is null || LogPanel.ActualWidth <= 0) return;
+
+        // The header's own furniture: its margins, the "Activity" label, the middle group's
+        // margin, and the four icon buttons at the end of the row.
+        const double furniture = 22 + 48 + 18 + 136;
+        const double searchFloor = 60;
+        const double searchCap = 170;
+        const double gap = 8;
+
+        var filter = _logFilterWanted > 0 ? _logFilterWanted : 145;
+        var room = LogPanel.ActualWidth - furniture;
+        var spare = room - filter - gap;
+
+        if (spare >= searchFloor)
+        {
+            LogSearchBox.Visibility = Visibility.Visible;
+            LogSearchBox.MaxWidth = Math.Min(spare, searchCap);
+            LogFilterTrack.MaxWidth = filter;
+        }
+        else
+        {
+            LogSearchBox.Visibility = Visibility.Collapsed;
+            // What the search box would have used goes to the filter, which may still fold.
+            LogFilterTrack.MaxWidth = Math.Max(96, room);
+        }
+    }
 
     private void OnLogToggled(object sender, RoutedEventArgs e)
     {

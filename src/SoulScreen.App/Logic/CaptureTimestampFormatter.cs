@@ -40,7 +40,7 @@ internal static class CaptureTimestampFormatter
     /// <summary>
     /// Overload that resolves the calendar choice from the app settings: explicit
     /// <see cref="TimestampSettings.UseShamsi"/> wins; otherwise the caller's
-    /// <paramref name="uiCulture"/> decides. Used by every capture-filename site so the
+    /// <see cref="uiCulture"/> decides. Used by every capture-filename site so the
     /// three lines of conditionals don't have to live at each one.
     /// </summary>
     public static string NewPath(
@@ -48,7 +48,7 @@ internal static class CaptureTimestampFormatter
         DateTime localTime,
         string extension,
         TimestampSettings settings,
-        System.Globalization.CultureInfo uiCulture,
+        CultureInfo uiCulture,
         string deviceName = "",
         Func<string, bool>? exists = null)
     {
@@ -59,7 +59,7 @@ internal static class CaptureTimestampFormatter
     /// <summary>The stem portion, exposed so tests can round-trip parse.</summary>
     public static string BuildStem(DateTime localTime, bool useShamsi, string deviceName = "")
     {
-        // Shamsi stems carry a "SH" calendar marker so the parser knows which calendar the
+        // Shamsi stems carry a "-SH" calendar marker so the parser knows which calendar the
         // 14-digit numeric block is in. Gregorian stems stay plain, matching today's format
         // for files written before this feature existed.
         var timePart = useShamsi
@@ -130,16 +130,24 @@ internal static class CaptureTimestampFormatter
         var hh = int.Parse(s.Substring(8, 2), CultureInfo.InvariantCulture);
         var mi = int.Parse(s.Substring(10, 2), CultureInfo.InvariantCulture);
         var ss = int.Parse(s.Substring(12, 2), CultureInfo.InvariantCulture);
-        try
+
+        if (shamsi)
         {
-            if (shamsi)
+            try
             {
                 var pc = new PersianCalendar();
                 return pc.ToDateTime(yyyy, mm, dd, hh, mi, ss, 0);
             }
+            catch (ArgumentOutOfRangeException)
+            {
+                // Shamsi parse failed: fall through to Gregorian attempt.
+            }
         }
-        catch (ArgumentOutOfRangeException) { return null; }
-        try { return new DateTime(yyyy, mm, dd, hh, mi, ss, DateTimeKind.Local); }
+
+        try
+        {
+            return new DateTime(yyyy, mm, dd, hh, mi, ss, DateTimeKind.Local);
+        }
         catch (ArgumentOutOfRangeException) { return null; }
     }
 

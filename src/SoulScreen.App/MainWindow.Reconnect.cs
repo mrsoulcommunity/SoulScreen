@@ -149,6 +149,12 @@ public partial class MainWindow
     private void ShowReconnectPill(string text, bool pulsing)
     {
         _reconnectedFade?.Stop();
+        // A phone's name can be a long one, and the badge shares its line with the recording and
+        // paused pills. Trimmed to what the picture can spare, so the outermost pill is not
+        // pushed off the edge of a narrow window. The badges themselves wrap when even that is
+        // not enough room for all three.
+        var room = ContentGrid.ActualWidth > 0 ? ContentGrid.ActualWidth - 150 : 240;
+        ReconnectPillText.MaxWidth = Math.Max(72, room);
         ReconnectPillText.Text = text;
         ReconnectPill.Visibility = Visibility.Visible;
 

@@ -18,6 +18,21 @@ public partial class MainWindow
     /// <summary>Panel width from which the sidebar is shown beside the cards.</summary>
     private const double SettingsSidebarBreakpoint = 700;
 
+    /// <summary>
+    /// How much room a row's title needs beside its control before the two are better off one
+    /// above the other. Below this the title is reduced to a couple of characters per line,
+    /// which is harder to read than a taller row.
+    /// </summary>
+    private const double SettingsTitleFloor = 170;
+
+    /// <summary>The widths a row's control would want if it were given the room, measured once
+    /// per row so the stacking decision does not depend on how the current template laid out.</summary>
+    private readonly Dictionary<SettingRow, double> _settingControlWidths = [];
+
+    /// <summary>Rows authored as stacked in the markup - a control that is meant to take the
+    /// full width - recorded at startup so a wide window never un-stacks one of them.</summary>
+    private readonly HashSet<SettingRow> _authoredStacked = [];
+
     /// <summary>A titled group of settings: its heading, its card, and the rows inside it.</summary>
     private sealed record SettingsSection(
         string Title, string Glyph, Brush IconBrush, string Keywords,
@@ -42,7 +57,7 @@ public partial class MainWindow
         ["REGIONAL"] = ("Regional", "", "NavTeal", "language locale persian shamsi calendar fa-IR dates date time timezone"),
         ["PICTURE"] = ("Picture", "", "NavGreen", "video display screen graph"),
         ["AUDIO"] = ("Audio", "", "NavPink", "sound speakers"),
-        ["WHEN A PHONE CONNECTS"] = ("When a phone connects", "", "NavOrange", "automatic connect session"),
+        ["WHEN A PHONE CONNECTS"] = ("When a phone connects", "\uE945", "NavOrange", "automatic connect session"),
         ["PRIVACY"] = ("Privacy", "\uEA18", "NavRed", "privacy ask approve allow block trust permission security"),
         ["SECURITY"] = ("Security", "\uEA18", "NavRed", "pin lock password security passcode idle protect"),
         ["WATERMARK"] = ("Watermark", "\uE8B9", "NavIndigo", "watermark logo brand overlay screenshot stamp"),
@@ -69,12 +84,28 @@ public partial class MainWindow
                 : (Title: heading.Text, Glyph: "", Brush: "NavGray", Keywords: "");
 
             var rows = card.Child is Panel panel ? panel.Children.OfType<SettingRow>().ToList() : [];
+            foreach (var row in rows)
+            {
+                if (row.Stacked) _authoredStacked.Add(row);
+                if (row.Content is FrameworkElement control)
+                {
+                    // Unconstrained, so the figure is what the control needs rather than what
+                    // the row it is currently sitting in happened to leave it.
+                    control.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+                    _settingControlWidths[row] = control.DesiredSize.Width;
+                }
+            }
+
             _settingsSections.Add(new SettingsSection(look.Title, look.Glyph, (Brush)FindResource(look.Brush),
                 look.Keywords, heading, card, rows));
         }
 
         SettingsNav.ItemsSource = _settingsSections;
         SettingsPanel.SizeChanged += (_, _) => UpdateSettingsLayout();
+        // The cards' own width is what decides whether a control still fits beside its title,
+        // and it is only known once the panel has laid out - which may be after the panel's
+        // own size settled, so the row decision follows the content rather than the window.
+        SettingsContent.SizeChanged += (_, _) => UpdateSettingsRowStacking();
         BuildAccentSwatches();
     }
 
@@ -86,11 +117,46 @@ public partial class MainWindow
     {
         if (SettingsPanel.Visibility != Visibility.Visible || SettingsPanel.ActualWidth <= 0) return;
 
+        UpdateSettingsRowStacking();
+
         var wide = SettingsPanel.ActualWidth >= SettingsSidebarBreakpoint;
         SettingsSidebar.Visibility = wide ? Visibility.Visible : Visibility.Collapsed;
         HeaderSearchHost.Visibility = wide ? Visibility.Collapsed : Visibility.Visible;
         MoveSettingsSearch(wide ? SidebarSearchHost : HeaderSearchHost);
         UpdateSettingsHeading();
+    }
+
+    /// <summary>
+    /// Keeps every row readable as the panel narrows: a row whose control and title cannot
+    /// both fit side by side puts the control under the title instead. Rows authored stacked
+    /// stay stacked at any width - their control was designed to span the card - and every
+    /// other row goes back beside its title as soon as there is room, so a wide window shows
+    /// the familiar two-column card.
+    /// </summary>
+    private void UpdateSettingsRowStacking()
+    {
+        // One figure for every row: the width the cards are laid out at. Read on the content
+        // column once, rather than per row, so the decision cannot be biased by the template a
+        // row is currently using.
+        var contentWidth = SettingsContent.ActualWidth;
+        if (contentWidth <= 0)
+        {
+            var sidebar = SettingsSidebar.Visibility == Visibility.Visible ? SettingsSidebar.Width : 0;
+            contentWidth = Math.Min(620, Math.Max(0, SettingsPanel.ActualWidth - sidebar - 44));
+        }
+        if (contentWidth <= 0) return;
+
+        // A row's own padding, and the gap between the title and its control.
+        var usable = contentWidth - 28 - 14;
+
+        foreach (var section in _settingsSections)
+        {
+            foreach (var row in section.Rows)
+            {
+                row.Stacked = _authoredStacked.Contains(row)
+                    || (_settingControlWidths.TryGetValue(row, out var control) && control + SettingsTitleFloor > usable);
+            }
+        }
     }
 
     private void MoveSettingsSearch(Border host)
@@ -336,9 +402,9 @@ public partial class MainWindow
         ThemeManager.Apply(_settings.Theme, accent, animate: true);
         SaveActiveDeviceProfile();
 
-        _populatingSettings = true;
+        BeginPopulateSettings();
         try { SyncAccentSwatches(); }
-        finally { _populatingSettings = false; }
+        finally { EndPopulateSettings(); }
     }
 
     private void SetTheme(AppTheme theme)
@@ -348,7 +414,7 @@ public partial class MainWindow
         _settings.Save();
         ThemeManager.Apply(theme, _settings.Accent, animate: true);
 
-        _populatingSettings = true;
+        BeginPopulateSettings();
         try
         {
             ThemeSystem.IsChecked = theme == AppTheme.System;
@@ -357,7 +423,7 @@ public partial class MainWindow
         }
         finally
         {
-            _populatingSettings = false;
+            EndPopulateSettings();
         }
     }
 }

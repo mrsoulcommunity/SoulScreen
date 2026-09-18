@@ -28,6 +28,23 @@ public class CaptureFilterTests
     }
 
     [Fact]
+    public void FavoriteAnswersToFavoriteAndStarOnlyWhenStarred()
+    {
+        var name = "SoulScreen-20260915-101500.png";
+        Assert.True(CaptureFilter.Matches(name, "favorite", isFavorite: true));
+        Assert.True(CaptureFilter.Matches(name, "star", isFavorite: true));
+        Assert.False(CaptureFilter.Matches(name, "favorite", isFavorite: false));
+    }
+
+    [Fact]
+    public void FavoriteCombinesWithOtherTerms()
+    {
+        var recording = "SoulScreen-20260915-101500.mp4";
+        Assert.True(CaptureFilter.Matches(recording, "favorite rec", isFavorite: true));
+        Assert.False(CaptureFilter.Matches(recording, "favorite png", isFavorite: true));
+    }
+
+    [Fact]
     public void SortingPutsNewestFirstByDefault()
     {
         var captures = new List<(DateTime Modified, long Size)>
@@ -147,8 +164,8 @@ public class RecordingTimerTests
 
 public class CaptureBudgetTests
 {
-    private static CaptureBudget.Candidate Capture(string path, long size, int daysAgo, bool active = false) =>
-        new(path, size, DateTime.UtcNow - TimeSpan.FromDays(daysAgo), active);
+    private static CaptureBudget.Candidate Capture(string path, long size, int daysAgo, bool active = false, bool favorite = false) =>
+        new(path, size, DateTime.UtcNow - TimeSpan.FromDays(daysAgo), active, favorite);
 
     [Fact]
     public void NoBudgetMeansNothingToDo()
@@ -217,6 +234,31 @@ public class CaptureBudgetTests
     {
         Assert.Contains("MB", CaptureBudget.DescribeFreed(5 * 1024 * 1024));
         Assert.Contains("GB", CaptureBudget.DescribeFreed(3L * 1024 * 1024 * 1024));
+    }
+
+    [Fact]
+    public void AFavoriteIsNeverRemoved()
+    {
+        var captures = new[]
+        {
+            Capture("starred", 900, 60, favorite: true),
+            Capture("plain", 500, 30),
+        };
+        var plan = CaptureBudget.PlanRemoval(captures, 1000);
+        Assert.DoesNotContain("starred", plan.Remove);
+        Assert.Single(plan.Remove);
+        Assert.Equal("plain", plan.Remove[0]);
+    }
+
+    [Fact]
+    public void OnlyFavoritesMeansNoPlanEvenOverBudget()
+    {
+        var captures = new[]
+        {
+            Capture("a", 800, 60, favorite: true),
+            Capture("b", 800, 30, favorite: true),
+        };
+        Assert.Empty(CaptureBudget.PlanRemoval(captures, 1000).Remove);
     }
 }
 

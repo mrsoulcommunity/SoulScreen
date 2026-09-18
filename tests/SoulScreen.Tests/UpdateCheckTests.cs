@@ -157,4 +157,17 @@ public class UpdatePolicyTests
     {
         Assert.Null(UpdatePolicy.ParseDigest(digest));
     }
+
+    [Theory]
+    [InlineData(0, true)]
+    [InlineData(1, true)]
+    [InlineData(3, true)]
+    [InlineData(7, true)]
+    [InlineData(8, false)]
+    [InlineData(16, false)]
+    [InlineData(-1, false)]
+    public void RobocopyExitCodesUnderEightAreSuccessful(int code, bool expected)
+    {
+        Assert.Equal(expected, UpdatePolicy.IsSuccessfulMirror(code));
+    }
 }

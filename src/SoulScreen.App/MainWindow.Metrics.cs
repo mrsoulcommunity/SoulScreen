@@ -82,7 +82,6 @@ public partial class MainWindow
         CheckRecurringRecordings();
         CheckIdleLock();
         SampleMetricsHistory();
-        ////RefreshMultiDeviceGrid();
 
         var source = ActiveSource;
         if (source is null)
@@ -186,17 +185,12 @@ public partial class MainWindow
 
     /// <summary>
     /// Keeps what floats over the picture clear of everything else up there: the notice bar
-    /// across the top and, in fullscreen, the toolbar and status bar that come and go over the
-    /// edges. Held at the same place whether those strips are showing or not, so nothing jumps
-    /// each time the pointer moves.
+    /// across the top, and the control bar, markup bar and log at the foot.
     /// </summary>
     private void PositionOverlays()
     {
-        var chromeTop = _isFullscreen ? Toolbar.Height : 0;
-        var chromeBottom = _isFullscreen ? StatusBar.ActualHeight : 0;
-
-        SetMargin(NoticeBar, new Thickness(0, chromeTop, 0, 0));
-        var top = chromeTop + (NoticeBar.Visibility == Visibility.Visible ? NoticeBar.ActualHeight : 0) + 14;
+        SetMargin(NoticeBar, new Thickness(0));
+        var top = (NoticeBar.Visibility == Visibility.Visible ? NoticeBar.ActualHeight : 0) + 14;
         SetMargin(StatsHud, new Thickness(14, top, 0, 0));
         SetMargin(PictureBadges, new Thickness(0, top, 0, 0));
         SetMargin(ZoomBadge, new Thickness(0, top, 14, 0));
@@ -204,7 +198,7 @@ public partial class MainWindow
         // The foot of the picture holds the control bar, or the markup bar in its place, and the
         // activity log docks under both. Toasts rise above whichever is there - by the bar's
         // height whether it is faded in or not, so a toast never jumps as the pointer moves.
-        var bottom = chromeBottom + (LogPanel.Visibility == Visibility.Visible ? LogPanel.ActualHeight : 0);
+        var bottom = LogPanel.Visibility == Visibility.Visible ? LogPanel.ActualHeight : 0;
         var barLift = IsMarkupActive ? 54
             : ControlBar.Visibility == Visibility.Visible ? Math.Max(ControlBar.ActualHeight, 42) + 12
             : 0;
