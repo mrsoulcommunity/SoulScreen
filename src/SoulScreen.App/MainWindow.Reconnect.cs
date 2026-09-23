@@ -82,7 +82,7 @@ public partial class MainWindow
         // immediately instead of waiting for a restart.
         ClearReconnectHold();
         EndSessionBookkeeping(SessionEndReason.PhoneEnded);
-        SetIdleState("Waiting for your iPhone", "This PC is advertising itself on your network.", MirrorSourceState.Ready);
+        ShowWaitingForDevice(MirrorSourceState.Ready);
         UpdateTray();
     }
 

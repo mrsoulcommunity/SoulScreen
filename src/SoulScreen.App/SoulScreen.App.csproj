@@ -4,6 +4,7 @@
     <ProjectReference Include="..\SoulScreen.Core\SoulScreen.Core.csproj" />
     <ProjectReference Include="..\SoulScreen.AirPlay\SoulScreen.AirPlay.csproj" />
     <ProjectReference Include="..\SoulScreen.Usb\SoulScreen.Usb.csproj" />
+    <ProjectReference Include="..\SoulScreen.Android\SoulScreen.Android.csproj" />
     <ProjectReference Include="..\SoulScreen.Media\SoulScreen.Media.csproj" />
   </ItemGroup>
 

@@ -37,6 +37,16 @@ public partial class MainWindow
     private ConnectDecision DecideFor(SourceDeviceInfo? device)
     {
         if (_demo is not null) return ConnectDecision.Allow;
+
+        // The trust lists and the question are AirPlay's: they key off the name and model a
+        // mirroring iPhone reports, and every word of the wording is about iPhones. Android
+        // mirroring is started deliberately, from this app, on a phone the user plugged in
+        // and told to allow USB debugging - so there is nothing to ask. It also cannot be
+        // turned away: RejectSession drops the session through the receiver's connection,
+        // which does not exist for an Android session, leaving the phone streaming into a
+        // window that would never show it.
+        if (_android is not null) return ConnectDecision.Allow;
+
         if (device is not { } known) return _settings.AskBeforeMirroring ? ConnectDecision.Ask : ConnectDecision.Allow;
         return DeviceTrust.Decide(_settings.AskBeforeMirroring, _settings.AllowedDevices, _settings.BlockedDevices, known.Name, known.Model);
     }

@@ -6,6 +6,7 @@ using System.Windows;
 using System.Windows.Media;
 using System.Windows.Threading;
 using SoulScreen.AirPlay.FairPlay;
+using SoulScreen.Android;
 using SoulScreen.App.Logic;
 using SoulScreen.Core.Sources;
 using SoulScreen.Core.Time;
@@ -270,6 +271,22 @@ public partial class MainWindow
             : new("The video decoder is missing",
                 "A phone will connect but nothing will be drawn. Run 'pwsh tools/fetch-ffmpeg.ps1' and restart SoulScreen.",
                 CheckStatus.Problem));
+
+        if (_settings.EnableAndroid)
+        {
+            checks.Add(AdbRuntime.IsAvailable
+                ? new("Android mirroring is ready", $"adb found at {AdbRuntime.ExecutablePath}.", CheckStatus.Good)
+                : new("adb was not found", AdbRuntime.UnavailableReason ?? "", CheckStatus.Info));
+
+            if (AdbRuntime.IsAvailable)
+            {
+                checks.Add(ScrcpyServerRuntime.IsAvailable
+                    ? new("Android audio and rotation support is ready",
+                        $"scrcpy-server {ScrcpyServerRuntime.ServerVersion} found.", CheckStatus.Good)
+                    : new("Android mirroring will be video-only",
+                        ScrcpyServerRuntime.UnavailableReason ?? "", CheckStatus.Info));
+            }
+        }
 
         var tier = RenderCapability.Tier >> 16;
         checks.Add(tier switch

@@ -26,6 +26,7 @@
     <ProjectReference Include="..\..\src\SoulScreen.Core\SoulScreen.Core.csproj" />
     <ProjectReference Include="..\..\src\SoulScreen.AirPlay\SoulScreen.AirPlay.csproj" />
     <ProjectReference Include="..\..\src\SoulScreen.Media\SoulScreen.Media.csproj" />
+    <ProjectReference Include="..\..\src\SoulScreen.Android\SoulScreen.Android.csproj" />
   </ItemGroup>
 
   <ItemGroup>

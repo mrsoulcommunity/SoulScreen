@@ -269,6 +269,12 @@ public sealed class AppSettings
     /// <summary>Start advertising as soon as the app opens.</summary>
     public bool StartReceiverOnLaunch { get; set; } = true;
 
+    /// <summary>Offer "Mirror an Android phone" (over adb - USB or wireless debugging) from
+    /// the command palette, and check for adb on the connection check. On by default: unlike
+    /// AirPlay this opens no port and advertises nothing, and does nothing at all unless the
+    /// user explicitly starts it.</summary>
+    public bool EnableAndroid { get; set; } = true;
+
     // Advertised-resolution bounds. Shared by Normalise() and by the settings form's
     // validation, so a value the form rejects is one a hand-edited file could not have
     // kept either.

@@ -280,6 +280,17 @@ public partial class MainWindow
                 yield return new("Try the demo: refresh-rate checker", "Receiver", "", null,
                     () => OnDemoRequested(DemoPattern.RefreshRateChecker), "test pattern sample no phone judder stutter hz refresh");
             }
+
+            if (_demo is null && _android is null && _settings.EnableAndroid)
+            {
+                yield return new("Mirror an Android phone", "Receiver", "", null, OnAndroidRequested,
+                    "android usb adb cable wired wireless debugging connect");
+            }
+            else if (_android is not null)
+            {
+                yield return new("Stop mirroring the Android phone", "Receiver", "", null,
+                    () => DisconnectAndroidAsync(), "android usb adb stop disconnect");
+            }
         }
 
         yield return new("Captures", "Go to", "\uEAB9", "Ctrl+G", ShowCaptures, "gallery screenshots recordings photos videos library");

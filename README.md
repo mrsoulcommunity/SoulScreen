@@ -9,7 +9,7 @@
 [![Release](https://img.shields.io/github/v/release/mrsoulcommunity/SoulScreen?label=release&color=0e0f13)](https://github.com/mrsoulcommunity/SoulScreen/releases/latest)
 [![Platform](https://img.shields.io/badge/platform-Windows%2011%20x64-0e0f13)](#requirements)
 [![.NET](https://img.shields.io/badge/.NET-8.0-512BD4)](#building-from-source)
-[![Tests](https://img.shields.io/badge/tests-482%20passing-2ea043)](#testing)
+[![Tests](https://img.shields.io/badge/tests-511%20passing-2ea043)](#testing)
 
 </div>
 
@@ -19,8 +19,12 @@ Two transports, one app:
 
 - **AirPlay** — the PC advertises itself as an AirPlay receiver, so it shows up under
   *Control Center → Screen Mirroring* with nothing installed on the phone.
-- **USB** — the hidden QuickTime video stream an iPhone exposes over its cable. Lower
+- **USB (iPhone)** — the hidden QuickTime video stream an iPhone exposes over its cable. Lower
   latency, no FairPlay, but needs a driver swap on Windows. *(in progress)*
+- **Android, over adb** — cable or wireless debugging, with audio and live-rotation support
+  via the scrcpy server, falling back to the phone's own `screenrecord` binary when that is
+  not available. No driver swap: Android's standard adb interface is all it needs. See
+  [Android mirroring](#android-mirroring) below.
 
 Windows 11, .NET 8, x64.
 
@@ -31,6 +35,7 @@ Windows 11, .NET 8, x64.
 - [Requirements](#requirements)
 - [Building from source](#building-from-source)
 - [Usage](#usage)
+- [Android mirroring](#android-mirroring)
 - [Why there is a native helper](#why-there-is-a-native-helper)
 - [Layout](#layout)
 - [Testing](#testing)
@@ -70,7 +75,8 @@ phone's screen at 498x1080 / 59.9 fps.
 | Notification-area icon, launch at sign-in | working |
 | Demo pattern, for trying the app with no phone | working |
 | Auto-update from GitHub releases, with checksum verification | working |
-| USB transport | deferred; see [src/SoulScreen.Usb/UsbTransport.cs](src/SoulScreen.Usb/UsbTransport.cs) |
+| USB transport (iPhone) | deferred; see [src/SoulScreen.Usb/UsbTransport.cs](src/SoulScreen.Usb/UsbTransport.cs) |
+| Android mirroring over adb (USB or wireless debugging) | working; see [src/SoulScreen.Android](src/SoulScreen.Android) |
 
 ---
 
@@ -433,6 +439,59 @@ fairplay                                                           self-test the
 
 ---
 
+## Android mirroring
+
+Unlike the iPhone, an Android phone needs no driver swap: turn on **USB debugging**
+(Settings → About phone → tap "Build number" 7 times, then Settings → Developer options →
+USB debugging), plug it in, and tap "Allow" on the phone the first time SoulScreen reads
+its screen. From the command palette (`Ctrl+K` or the phone icon), choose **Mirror an
+Android phone**.
+
+Wireless works too, once paired over USB at least once: turn on Developer options →
+Wireless debugging, then `adb connect <phone-ip>:<port>` from a terminal (or pair it from
+Android Studio). SoulScreen just asks `adb devices` for whatever is there — cable or
+Wi-Fi — and picks whichever answers first.
+
+**How it works.** SoulScreen tries two capture paths, in order:
+
+1. **scrcpy server (preferred).** SoulScreen pushes Genymobile's own `scrcpy-server` to
+   `/data/local/tmp` and runs it under `app_process` — the same thing the scrcpy desktop app
+   does, just with SoulScreen as the client instead. This is what makes **audio** (raw PCM,
+   captured with no on-phone consent dialog since it runs as the shell user rather than a
+   regular app) and **live rotation** possible: the phone re-announces its capture session -
+   new size, fresh SPS/PPS - whenever it rotates, all inside the same connection, instead of
+   the picture staying letterboxed.
+2. **`screenrecord` (fallback).** If the server was never fetched, or the handshake does not
+   complete, SoulScreen instead runs the phone's own `adb exec-out screenrecord
+   --output-format=h264 --time-limit 0 -` and reads the raw H.264 elementary stream straight
+   off stdout. Video only, and a fixed capture size for the life of the connection, but needs
+   nothing pushed to the phone.
+
+Either way, nothing is *installed* on the phone — no launcher icon, nothing to uninstall
+afterwards. The scrcpy server is pushed fresh into a temp directory each session.
+
+**Known limits of the `screenrecord` fallback**, inherent to that binary rather than
+something SoulScreen works around, and the reason the scrcpy path exists:
+
+- **No audio.** `screenrecord` has never captured sound, on any Android version.
+- **No live rotation.** `screenrecord` captures at a fixed size for the life of the
+  process; turning the phone mid-session letterboxes rather than resizes. Reconnecting
+  (unplug/replug, or toggle mirroring off and on) picks up the new orientation.
+- **Android 12 (API 31) or newer.** `--output-format=h264` is what makes raw streaming to
+  stdout possible; older releases only ever write a finished `.mp4` file. The scrcpy path has
+  no such floor - it works down to whatever the server itself supports (Android 5+).
+
+**Setup.** Neither helper is bundled with the source:
+
+- `tools/fetch-adb.ps1` downloads Google's official platform-tools into `native/adb`. A
+  machine that already has Android Studio installed needs nothing extra: SoulScreen also
+  checks the default SDK location and PATH.
+- `tools/fetch-scrcpy-server.ps1` downloads Genymobile's signed release asset (checksum
+  verified) into `native/scrcpy`, for audio and rotation support. Without it, Android
+  mirroring still works through the `screenrecord` fallback above.
+
+---
+
 ## Why there is a native helper
 
 iOS will not release the AES key for a mirroring stream until the receiver answers Apple's
@@ -474,7 +533,8 @@ src/
     Streams/             mirrored video, audio, stream ciphers, H.264 helpers
     Plist/               binary and XML property lists
     Crypto/              stateful AES-CTR
-  SoulScreen.Usb/        the USB/QuickTime transport (in progress)
+  SoulScreen.Usb/        the iPhone USB/QuickTime transport (in progress)
+  SoulScreen.Android/    Android mirroring over adb (scrcpy server, screenrecord fallback)
   SoulScreen.Media/      decode, pace, play and record
   SoulScreen.App/        WPF shell: chrome, picture, settings, log, tray, metrics
   SoulScreen.Cli/        headless receiver and protocol tools

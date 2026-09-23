@@ -33,11 +33,13 @@ public partial class MainWindow : Window
     private AppSettings _settings;
     private AirPlayReceiver? _receiver;
     private DemoSource? _demo;
+    private SoulScreen.Android.AndroidMirrorSource? _android;
     private VideoPipeline? _pipeline;
     private AudioPipeline? _audio;
 
-    /// <summary>Whatever is feeding the picture: the receiver, or the demo pattern.</summary>
-    private IMirrorSource? ActiveSource => _receiver is not null ? _receiver : _demo;
+    /// <summary>Whatever is feeding the picture: the receiver, the demo pattern, or an
+    /// Android phone mirroring over adb - see MainWindow.Android.cs.</summary>
+    private IMirrorSource? ActiveSource => _receiver is not null ? _receiver : _demo is not null ? _demo : _android;
 
     /// <summary>True while the demo is what is on screen, so it is kept out of the history.</summary>
     private bool _sessionIsDemo;
@@ -345,6 +347,21 @@ public partial class MainWindow : Window
             await demo.DisposeAsync();
         }
 
+        // Android mirroring is another live source the same rule covers: only one of the
+        // three may ever be streaming, so stopping the receiver (to start it again, to run
+        // the demo, or to shut down) ends Android too. Without this, toggling the receiver
+        // on while a phone mirrored over adb left both running, two pipelines decoding into
+        // one surface - and the pipeline still attached to the phone was disposed later as
+        // if it were the receiver's.
+        var android = _android;
+        _android = null;
+        if (android is not null)
+        {
+            android.StateChanged -= OnReceiverStateChanged;
+            android.VideoFormatChanged -= OnVideoFormatChanged;
+            await android.DisposeAsync();
+        }
+
         var pipeline = _pipeline;
         _pipeline = null;
         if (pipeline is not null)
@@ -409,6 +426,13 @@ public partial class MainWindow : Window
         {
             // Ending the demo puts the receiver back, which is what was running before it.
             DisconnectDemoAsync();
+            return;
+        }
+
+        if (_android is not null)
+        {
+            // Same idea: ending Android mirroring puts the receiver back, if it was running.
+            DisconnectAndroidAsync();
             return;
         }
 
@@ -529,7 +553,7 @@ public partial class MainWindow : Window
                     // moment out of range, and the recording should survive that.
                     if (HoldSessionForReconnect()) break;
                     EndSessionBookkeeping(SessionEndReason.PhoneEnded);
-                    SetIdleState("Waiting for your iPhone", "This PC is advertising itself on your network.", e.State);
+                    ShowWaitingForDevice(e.State);
                     break;
                 case MirrorSourceState.Connecting:
                     // While a session is being held open for the phone that dropped, the same
@@ -591,7 +615,9 @@ public partial class MainWindow : Window
                 }
                 case MirrorSourceState.Faulted:
                     EndSessionBookkeeping(SessionEndReason.Faulted);
-                    SetIdleState("The receiver stopped", e.Message ?? "See the activity log.", e.State);
+                    SetIdleState(
+                        _android is not null ? "Android mirroring stopped" : "The receiver stopped",
+                        e.Message ?? "See the activity log.", e.State);
                     break;
                 default:
                     EndSessionBookkeeping(SessionEndReason.PhoneEnded);
@@ -891,6 +917,25 @@ public partial class MainWindow : Window
         UpdatePictureCorners();
         UpdateTaskbar();
         FadeContentIn(IdlePanel);
+    }
+
+    /// <summary>The idle screen's "nothing is streaming yet" message, worded for whatever
+    /// source is actually waiting. The receiver's own line talks about advertising on the
+    /// network; an Android session has no receiver behind it - it is waiting on a cable or
+    /// on adb - so showing the AirPlay line there would describe something that is not
+    /// happening.</summary>
+    private void ShowWaitingForDevice(MirrorSourceState state)
+    {
+        if (_android is not null)
+        {
+            SetIdleState("Waiting for an Android phone",
+                "Plug in a phone with USB debugging turned on, or run adb connect for wireless debugging.",
+                state);
+        }
+        else
+        {
+            SetIdleState("Waiting for your iPhone", "This PC is advertising itself on your network.", state);
+        }
     }
 
     private void SetIdleState(string title, string subtitle, MirrorSourceState state)

@@ -78,6 +78,11 @@ public sealed class VideoPipeline : IAsyncDisposable
     /// has a decoder of its own; sharing one would tie recording to whether sound is on.</summary>
     private AudioDecoder? _recordAudioDecoder;
     private AudioFormat _audioFormat = AudioFormat.None;
+
+    /// <summary>The rate and channel count of the open recording's audio track, so what the
+    /// decoder produces is compared against the track actually declared rather than against
+    /// a hard-coded assumption about the sender.</summary>
+    private RecordingAudioTrack _recordingAudioTrack = RecordingAudioTrack.AirPlay;
     private long _receivedBytes;
 
     /// <summary>SPS and PPS in Annex-B, prepended to each keyframe so the decoder can start
@@ -307,8 +312,8 @@ public sealed class VideoPipeline : IAsyncDisposable
                 {
                     if (!_audioFormat.IsValid) return;
                     _recordAudioDecoder = new AudioDecoder(_audioFormat);
-                    if (_recordAudioDecoder.OutputSampleRate != RecordingAudioTrack.AirPlay.SampleRate
-                        || _recordAudioDecoder.OutputChannels != RecordingAudioTrack.AirPlay.Channels)
+                    if (_recordAudioDecoder.OutputSampleRate != _recordingAudioTrack.SampleRate
+                        || _recordAudioDecoder.OutputChannels != _recordingAudioTrack.Channels)
                     {
                         _log.Warn($"audio is {_audioFormat}, which the recording's track does not match; recording without it");
                         _recordAudioDecoder.Dispose();
@@ -610,7 +615,8 @@ public sealed class VideoPipeline : IAsyncDisposable
     {
         try
         {
-            var audio = RecordAudio ? RecordingAudioTrack.AirPlay : (RecordingAudioTrack?)null;
+            var audio = RecordAudio ? TrackForAudioFormat() : (RecordingAudioTrack?)null;
+            if (audio is { } declared) _recordingAudioTrack = declared;
             _recorder = SessionRecorder.Create(path, format, audio);
             return true;
         }
@@ -619,6 +625,20 @@ public sealed class VideoPipeline : IAsyncDisposable
             _log.Error($"could not start recording to {path}", ex);
             return false;
         }
+    }
+
+    /// <summary>The track the open recording should declare: the stream's own rate and
+    /// channel count when they are already known - scrcpy hands over 48 kHz stereo PCM where
+    /// AirPlay sends 44.1 kHz AAC-ELD - falling back to AirPlay's shape when nothing has
+    /// announced an audio format yet. Declaring the wrong rate is a recording whose audio is
+    /// silently dropped the moment the first packet arrives, because the decoded output can
+    /// never match the track.</summary>
+    private RecordingAudioTrack TrackForAudioFormat()
+    {
+        var format = _audioFormat;
+        return format.IsValid
+            ? new RecordingAudioTrack(format.SampleRate, format.Channels)
+            : RecordingAudioTrack.AirPlay;
     }
 
     private void UpdateFrameRate()
